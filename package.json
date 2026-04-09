@@ -1,0 +1,20 @@
+{
+  "name": "esquina-burger-bot",
+  "version": "1.0.0",
+  "description": "Bot de WhatsApp com IA para o Esquina Burger",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
