@@ -122,6 +122,7 @@ app.post('/webhook', async (req, res) => {
 
 // ── Endpoint para testar o bot sem WhatsApp ──
 app.post('/test', async (req, res) => {
+  if (!checkBotToken(req, res)) return;
   try {
     const { telefone, texto, pushName } = req.body;
     if (!telefone || !texto) {
@@ -206,6 +207,28 @@ app.post('/send', async (req, res) => {
     await enviarMensagem(tel, texto);
     await adicionarMensagem(tel, { role: 'assistant', texto, manual: true });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Backup completo do Firebase (protegido) — usado pra snapshot local antes de mexer
+app.get('/backup', async (req, res) => {
+  if (!checkBotToken(req, res)) return;
+  try {
+    const snapshot = {
+      geradoEm: new Date().toISOString(),
+      bot_conversas: (await fb.get('bot_conversas')) || {},
+      clientes_bot:  (await fb.get('clientes_bot'))  || {},
+      pedidos_abertos: (await fb.get('pedidos_abertos')) || {},
+      clientes:  (await fb.get('clientes'))  || {},
+      produtos:  (await fb.get('produtos'))  || {},
+      pedidos:   (await fb.get('pedidos'))   || {},
+      config:    (await fb.get('config'))    || {},
+    };
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="firebase-backup.json"');
+    res.send(JSON.stringify(snapshot, null, 2));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
