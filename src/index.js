@@ -34,6 +34,11 @@ const RESTAURANT_NAME   = process.env.RESTAURANTE_NOME || 'Esquina Burger';
 const DEFAULT_DELIVERY_FEE = parseFloat(process.env.TAXA_ENTREGA || '5.00');
 const POLL_INTERVAL_MS  = parseInt(process.env.POLL_INTERVAL_MS || '8000', 10);
 const HISTORY_LIMIT     = 20;
+// Só processa mensagens recebidas APÓS o bot subir — ignora histórico antigo
+// (evita reprocessar tudo após cada redeploy e duplicar pedidos)
+const BOT_STARTED_AT    = Math.floor(Date.now() / 1000);
+// Tempo mínimo entre 2 pedidos do mesmo telefone (em ms) — trava contra duplicação
+const PEDIDO_LOCK_MS    = 3 * 60 * 1000;
 
 // ============================================
 // ESTADO DINÂMICO (vem do Firebase em tempo real)
@@ -489,6 +494,12 @@ async function processarMensagem(phone, texto, nomeWhats) {
   }
 
   if (ia.action === 'finalizar_pedido' && ia.pedido && (ia.pedido.itens || []).length) {
+    // TRAVA CONTRA DUPLICAÇÃO: se já criou um pedido pra esse telefone nos últimos 3min, ignora
+    const ultimoCriadoEm = Number(conv.ultimoPedidoCriadoEm || 0);
+    if (ultimoCriadoEm && (Date.now() - ultimoCriadoEm) < PEDIDO_LOCK_MS) {
+      console.log(`⚠  Pedido duplicado ignorado para ${phone} (último há ${Math.round((Date.now()-ultimoCriadoEm)/1000)}s)`);
+      return;
+    }
     try {
       // Cadastra cliente (sempre que tiver nome). Para entrega obrigatório.
       if (novoEstado.nome_cliente) {
@@ -503,6 +514,7 @@ async function processarMensagem(phone, texto, nomeWhats) {
       console.log(`✅ Pedido criado: ${key}`);
       await update(ref(db, `bot_conversas/${phone}`), {
         ultimoPedidoKey: key,
+        ultimoPedidoCriadoEm: Date.now(),
         status: 'pedido_criado',
       });
     } catch (e) {
@@ -525,6 +537,9 @@ async function pollMensagens() {
     for (const m of msgs) {
       const id = m.key?.id || m.id;
       if (!id || processedMessages.has(id)) continue;
+      // Ignora mensagens anteriores ao boot do bot (evita reprocessar histórico após redeploy)
+      const msgTs = Number(m.messageTimestamp || m.key?.messageTimestamp || 0);
+      if (msgTs && msgTs < BOT_STARTED_AT) { processedMessages.add(id); continue; }
       if (m.key?.fromMe) { processedMessages.add(id); continue; }
       const jid = m.key?.remoteJid;
       if (!jid || jid.includes('@g.us')) { processedMessages.add(id); continue; }
@@ -560,6 +575,8 @@ app.post('/webhook', async (req, res) => {
       for (const m of list) {
         const id = m.key?.id;
         if (!id || processedMessages.has(id)) continue;
+        const msgTs = Number(m.messageTimestamp || m.key?.messageTimestamp || 0);
+        if (msgTs && msgTs < BOT_STARTED_AT) { processedMessages.add(id); continue; }
         if (m.key?.fromMe) { processedMessages.add(id); continue; }
         const jid = m.key?.remoteJid;
         if (!jid || jid.includes('@g.us')) { processedMessages.add(id); continue; }
