@@ -43,11 +43,13 @@ const HISTORY_LIMIT     = 20;
 let CARDAPIO_LIVE = [];
 let ENTREGA_CFG = { taxa: DEFAULT_DELIVERY_FEE, bairros: [], minimo: 0 };
 let BOT_CFG = {
-     menuImageUrl: process.env.MENU_IMAGE_URL || '',
-     chavePix: process.env.PIX_KEY || '46.757.307/0001-32',
-     tipoChavePix: process.env.PIX_TIPO || 'CNPJ',
-     nomeRecebedor: process.env.PIX_NOME || 'Esquina Burger',
-   };function getCardapio()    { return CARDAPIO_LIVE.length ? CARDAPIO_LIVE : CARDAPIO_FALLBACK; }
+  menuImageUrl: process.env.MENU_IMAGE_URL || '',
+  chavePix: process.env.PIX_KEY || '46.757.307/0001-32',
+  tipoChavePix: process.env.PIX_TIPO || 'CNPJ',
+  nomeRecebedor: process.env.PIX_NOME || 'Esquina Burger',
+};
+
+function getCardapio()    { return CARDAPIO_LIVE.length ? CARDAPIO_LIVE : CARDAPIO_FALLBACK; }
 function getDeliveryFee(bairro) {
   if (bairro && Array.isArray(ENTREGA_CFG.bairros)) {
     const norm = (s) => String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
@@ -167,8 +169,13 @@ function subscribeBotConfig() {
   onValue(ref(db, 'bot_config/bot'), (snap) => {
     const v = snap.val();
     if (v) {
-      BOT_CFG = { menuImageUrl: v.menuImageUrl || '' };
-      console.log(`✓ Bot config sincronizada: imagem cardápio ${BOT_CFG.menuImageUrl ? 'OK' : 'NÃO configurada'}`);
+      BOT_CFG = {
+        menuImageUrl: v.menuImageUrl || '',
+        chavePix: v.chavePix || '46.757.307/0001-32',
+        tipoChavePix: v.tipoChavePix || 'CNPJ',
+        nomeRecebedor: v.nomeRecebedor || 'Esquina Burger',
+      };
+      console.log(`✓ Bot config sincronizada: imagem ${BOT_CFG.menuImageUrl ? 'OK' : 'NÃO'} | Pix ${BOT_CFG.chavePix}`);
     }
   }, (err) => console.error('subscribe bot:', err.message));
 }
@@ -204,7 +211,15 @@ REGRAS DE COMPORTAMENTO (siga sempre):
 8. Pergunte a forma de pagamento (pix, dinheiro, cartão). Se for dinheiro, pergunte se precisa de troco e para quanto.
 9. Confirme o resumo do pedido (itens, total, tipo, pagamento) e só então retorne action="finalizar_pedido" com o JSON do pedido.
 10. Se o cliente apenas conversar (oi, bom dia, etc), responda educado, sem encher de informação.
+10.1. COMPROVANTE DE PIX / IMAGEM / FOTO: se o pedido JÁ foi finalizado e o cliente mandar uma imagem, um comprovante, uma mensagem do tipo "paguei", "pago", "comprovante", "enviei o pix", "ta aí", "segue" ou qualquer confirmação de pagamento, NÃO abra pedido novo, NÃO peça itens, NÃO mostre cardápio. Apenas agradeça, confirme o recebimento e avise que já vai sair (ex: "Recebemos seu comprovante! Já tá saindo 🛵"). Retorne action="responder" e NUNCA action="finalizar_pedido" nessa situação.
+10.2. Se o estado atual já tem itens e tipo definidos, considere que há um pedido em andamento/finalizado — qualquer mensagem curta depois disso é sobre ESSE pedido, não um novo.
 11. Taxa de entrega: R$ ${taxa.toFixed(2)} (some no total quando for entrega).${minimoTxt}
+12. CHAVE PIX (use SEMPRE esta, NUNCA invente placeholder, NUNCA escreva "chavepixaleatoria" ou "CNPJ/CPF" genérico):
+    - Tipo: ${BOT_CFG.tipoChavePix || 'CNPJ'}
+    - Chave: ${BOT_CFG.chavePix || '46.757.307/0001-32'}
+    - Recebedor: ${BOT_CFG.nomeRecebedor || RESTAURANT_NAME}
+    Quando o cliente pedir o Pix, envie EXATAMENTE no formato:
+    "Total: R$ X,XX\nChave Pix (${BOT_CFG.tipoChavePix || 'CNPJ'}): ${BOT_CFG.chavePix || '46.757.307/0001-32'}\nRecebedor: ${BOT_CFG.nomeRecebedor || RESTAURANT_NAME}\nMande o comprovante aqui quando pagar."
 
 CARDÁPIO (id | nome | preço):
 ${cardapioParaPrompt()}
@@ -242,7 +257,7 @@ Se action != "finalizar_pedido", "pedido" pode ser objeto vazio {}. Sempre preen
 // ============================================
 async function chamarGemini(historico, novaMsg, estadoAtual) {
   const model = genAI.getGenerativeModel({
-  model: 'gemini-2.5-flash',
+    model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',
       temperature: 0.6,
@@ -588,4 +603,4 @@ app.listen(PORT, () => {
     pollMensagens();
     console.log(`✓ Polling ativo a cada ${POLL_INTERVAL_MS}ms`);
   }
-});
+});  
