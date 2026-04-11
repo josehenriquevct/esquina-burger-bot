@@ -239,7 +239,7 @@ Se action != "finalizar_pedido", "pedido" pode ser objeto vazio {}. Sempre preen
 // ============================================
 async function chamarGemini(historico, novaMsg, estadoAtual) {
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.0-flash',
+  model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',
       temperature: 0.6,
