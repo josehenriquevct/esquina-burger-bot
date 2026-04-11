@@ -1,259 +1,588 @@
-// Servidor principal do bot do Esquina Burger
-// Recebe webhooks da Evolution API, processa com Gemini, responde via WhatsApp
-// Também expõe endpoints REST pra aba Atendimento do PDV
-import 'dotenv/config';
-import express from 'express';
-import { processarMensagem } from './ai.js';
-import { enviarMensagem, mostrarDigitando, parseWebhook } from './evolution.js';
-import { adicionarMensagem, salvarConversa, getConversa, fb } from './firebase.js';
+// ============================================
+// Esquina Burger - Bot WhatsApp (v2)
+// ============================================
+// Comportamento:
+//  - NÃO apresenta cardápio por padrão (a maioria já sabe o que quer)
+//  - Envia IMAGEM do cardápio só quando o cliente pede explicitamente
+//  - Se não pediu batata, oferece batata
+//  - Se não pediu bebida, oferece bebida
+//  - Pergunta retirada x entrega
+//      retirada -> não pede endereço, só avisa que avisará quando pronto
+//      entrega  -> pede endereço e cadastra cliente automaticamente
+//  - Salva conversas em bot_conversas/{telefone} no schema do PDV
+//  - Cria pedido em pedidos_abertos/{push} no schema que o PDV importa
+//  - Respeita pausa humana (status === 'pausado_humano' => não responde)
+// ============================================
+
+const express = require('express');
+const axios = require('axios');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { initializeApp } = require('firebase/app');
+const {
+  getDatabase, ref, push, set, update, get, onValue, serverTimestamp
+} = require('firebase/database');
+
+// ---------- Config ----------
+const PORT              = process.env.PORT || 3000;
+const GEMINI_KEY        = process.env.GEMINI_API_KEY;
+const FIREBASE_DB_URL   = process.env.FIREBASE_DB_URL;
+const EVOLUTION_URL     = process.env.EVOLUTION_URL || 'https://evolution-api-1ne0.srv1540257.hstgr.cloud';
+const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY;
+const INSTANCE_NAME     = process.env.EVOLUTION_INSTANCE || 'esquina-burger';
+const RESTAURANT_NAME   = process.env.RESTAURANTE_NOME || 'Esquina Burger';
+// Fallbacks - sobrescritos em runtime pelos valores que vêm do PDV via Firebase (bot_config/*)
+const DEFAULT_DELIVERY_FEE = parseFloat(process.env.TAXA_ENTREGA || '5.00');
+const POLL_INTERVAL_MS  = parseInt(process.env.POLL_INTERVAL_MS || '8000', 10);
+const HISTORY_LIMIT     = 20;
+
+// ============================================
+// ESTADO DINÂMICO (vem do Firebase em tempo real)
+// ============================================
+// O PDV escreve em bot_config/cardapio, bot_config/entrega e bot_config/bot.
+// O bot escuta esses paths e atualiza essas variáveis automaticamente.
+let CARDAPIO_LIVE = [];
+let ENTREGA_CFG = { taxa: DEFAULT_DELIVERY_FEE, bairros: [], minimo: 0 };
+let BOT_CFG = { menuImageUrl: process.env.MENU_IMAGE_URL || '' };
+
+function getCardapio()    { return CARDAPIO_LIVE.length ? CARDAPIO_LIVE : CARDAPIO_FALLBACK; }
+function getDeliveryFee(bairro) {
+  if (bairro && Array.isArray(ENTREGA_CFG.bairros)) {
+    const norm = (s) => String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+    const hit = ENTREGA_CFG.bairros.find(b => norm(b.nome) === norm(bairro));
+    if (hit && Number.isFinite(Number(hit.taxa))) return Number(hit.taxa);
+  }
+  return Number(ENTREGA_CFG.taxa) || DEFAULT_DELIVERY_FEE;
+}
+function getMenuImageUrl() { return BOT_CFG.menuImageUrl || process.env.MENU_IMAGE_URL || ''; }
+
+// Cardápio fallback (só usado se o PDV ainda não tiver sincronizado nada)
+const CARDAPIO_FALLBACK = [
+  // Hambúrgueres
+  { id: 1, categoria: 'hamburguer', nome: 'X-Burger',        preco: 18.00 },
+  { id: 2, categoria: 'hamburguer', nome: 'X-Salada',        preco: 20.00 },
+  { id: 3, categoria: 'hamburguer', nome: 'X-Bacon',         preco: 23.00 },
+  { id: 4, categoria: 'hamburguer', nome: 'X-Egg',           preco: 21.00 },
+  { id: 5, categoria: 'hamburguer', nome: 'X-Tudo',          preco: 28.00 },
+  { id: 6, categoria: 'hamburguer', nome: 'X-Frango',        preco: 22.00 },
+  { id: 7, categoria: 'hamburguer', nome: 'X-Calabresa',     preco: 22.00 },
+  { id: 8, categoria: 'hamburguer', nome: 'X-Esquina',       preco: 30.00 },
+  // Combos
+  { id: 20, categoria: 'combo', nome: 'Combo 1 (X-Burger + Batata + Refri)', preco: 32.00 },
+  { id: 21, categoria: 'combo', nome: 'Combo 2 (X-Tudo + Batata + Refri)',   preco: 42.00 },
+  // Porções (batata)
+  { id: 30, categoria: 'porcao', nome: 'Batata Frita P', preco: 10.00 },
+  { id: 31, categoria: 'porcao', nome: 'Batata Frita M', preco: 15.00 },
+  { id: 32, categoria: 'porcao', nome: 'Batata Frita G', preco: 20.00 },
+  // Bebidas
+  { id: 40, categoria: 'bebida', nome: 'Coca-Cola Lata',     preco: 6.00  },
+  { id: 41, categoria: 'bebida', nome: 'Coca-Cola 600ml',    preco: 9.00  },
+  { id: 42, categoria: 'bebida', nome: 'Coca-Cola 2L',       preco: 14.00 },
+  { id: 43, categoria: 'bebida', nome: 'Guaraná Lata',       preco: 6.00  },
+  { id: 44, categoria: 'bebida', nome: 'Guaraná 600ml',      preco: 8.00  },
+  { id: 45, categoria: 'bebida', nome: 'Guaraná 2L',         preco: 12.00 },
+  { id: 46, categoria: 'bebida', nome: 'Suco Lata',          preco: 6.00  },
+  { id: 47, categoria: 'bebida', nome: 'Água Mineral',       preco: 4.00  },
+  { id: 48, categoria: 'bebida', nome: 'Água com Gás',       preco: 5.00  },
+  { id: 49, categoria: 'bebida', nome: 'Heineken Long Neck', preco: 10.00 },
+  { id: 50, categoria: 'bebida', nome: 'Skol Lata',          preco: 6.00  },
+  { id: 51, categoria: 'bebida', nome: 'Brahma Lata',        preco: 6.00  },
+  { id: 52, categoria: 'bebida', nome: 'Energético',         preco: 12.00 },
+];
+
+function cardapioParaPrompt() {
+  const lista = getCardapio();
+  if (!lista.length) return '(cardápio ainda sincronizando do PDV...)';
+  // Agrupa por categoria pra ficar mais legível pro Gemini
+  const grupos = {};
+  lista.forEach(i => {
+    const cat = i.cat || i.categoria || 'outros';
+    (grupos[cat] = grupos[cat] || []).push(i);
+  });
+  const ordem = ['burgers','combos','porcoes','bebidas','outros'];
+  const cats = Object.keys(grupos).sort((a,b) => {
+    const ai = ordem.indexOf(a); const bi = ordem.indexOf(b);
+    return (ai<0?99:ai) - (bi<0?99:bi);
+  });
+  return cats.map(cat => {
+    const head = `── ${cat.toUpperCase()} ──`;
+    const linhas = grupos[cat].map(i =>
+      `${i.id} | ${i.nome}${i.desc ? ' — '+i.desc : ''} | R$ ${Number(i.preco).toFixed(2)}`
+    ).join('\n');
+    return head + '\n' + linhas;
+  }).join('\n');
+}
+
+function temBatataNoPedido(itens) {
+  const ids = (getCardapio() || [])
+    .filter(i => /batata|fritas/i.test(i.nome) || (i.cat||'').toLowerCase() === 'porcoes')
+    .map(i => i.id);
+  return (itens || []).some(i => ids.includes(i.id));
+}
+function temBebidaNoPedido(itens) {
+  const ids = (getCardapio() || [])
+    .filter(i => (i.cat||i.categoria||'').toLowerCase().includes('bebida'))
+    .map(i => i.id);
+  return (itens || []).some(i => ids.includes(i.id));
+}
+
+// ---------- Init ----------
+if (!GEMINI_KEY)      console.warn('⚠️  GEMINI_API_KEY não definida');
+if (!FIREBASE_DB_URL) console.warn('⚠️  FIREBASE_DB_URL não definida');
+if (!EVOLUTION_API_KEY) console.warn('⚠️  EVOLUTION_API_KEY não definida');
+
+const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+const firebaseApp = initializeApp({ databaseURL: FIREBASE_DB_URL });
+const db = getDatabase(firebaseApp);
+
+// ============================================
+// LIVE CONFIG SUBSCRIBE - PDV escreve, bot lê
+// ============================================
+function subscribeBotConfig() {
+  // Cardápio
+  onValue(ref(db, 'bot_config/cardapio'), (snap) => {
+    const v = snap.val();
+    if (v && Array.isArray(v.itens)) {
+      CARDAPIO_LIVE = v.itens;
+      console.log(`✓ Cardápio sincronizado: ${v.itens.length} itens (${new Date(v.atualizadoEm||Date.now()).toLocaleString('pt-BR')})`);
+    }
+  }, (err) => console.error('subscribe cardapio:', err.message));
+
+  // Entrega
+  onValue(ref(db, 'bot_config/entrega'), (snap) => {
+    const v = snap.val();
+    if (v) {
+      ENTREGA_CFG = {
+        taxa: Number(v.taxa) || DEFAULT_DELIVERY_FEE,
+        bairros: Array.isArray(v.bairros) ? v.bairros : [],
+        minimo: Number(v.minimo) || 0,
+      };
+      console.log(`✓ Entrega sincronizada: taxa R$ ${ENTREGA_CFG.taxa.toFixed(2)} | ${ENTREGA_CFG.bairros.length} bairros | mínimo R$ ${ENTREGA_CFG.minimo.toFixed(2)}`);
+    }
+  }, (err) => console.error('subscribe entrega:', err.message));
+
+  // Bot (URL da imagem do cardápio etc)
+  onValue(ref(db, 'bot_config/bot'), (snap) => {
+    const v = snap.val();
+    if (v) {
+      BOT_CFG = { menuImageUrl: v.menuImageUrl || '' };
+      console.log(`✓ Bot config sincronizada: imagem cardápio ${BOT_CFG.menuImageUrl ? 'OK' : 'NÃO configurada'}`);
+    }
+  }, (err) => console.error('subscribe bot:', err.message));
+}
+subscribeBotConfig();
 
 const app = express();
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '5mb' }));
 
-// CORS aberto pro PDV no navegador chamar os endpoints (token-protegido nos sensíveis)
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-bot-token, x-webhook-token');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
-});
+const processedMessages = new Set();
 
-const BOT_TOKEN = process.env.BOT_TOKEN || process.env.WEBHOOK_TOKEN || '';
-function checkBotToken(req, res) {
-  if (!BOT_TOKEN) return true;
-  const t = req.headers['x-bot-token'] || req.query.token;
-  if (t !== BOT_TOKEN) {
-    res.status(401).json({ error: 'Token inválido' });
-    return false;
+// ============================================
+// PROMPT
+// ============================================
+function buildSystemPrompt(estado) {
+  const taxa = getDeliveryFee(estado?.bairro);
+  const minimo = ENTREGA_CFG.minimo || 0;
+  const minimoTxt = minimo > 0 ? `\n11.1. O pedido mínimo para entrega é R$ ${minimo.toFixed(2)}. Se o cliente pedir entrega abaixo desse valor, avise educadamente.` : '';
+  return `Você é o atendente virtual do restaurante "${RESTAURANT_NAME}" no WhatsApp.
+Sua função é tirar pedidos rapidamente e de forma simpática.
+
+REGRAS DE COMPORTAMENTO (siga sempre):
+1. NÃO apresente o cardápio sem ser perguntado. A maioria dos clientes já sabe o que quer.
+2. Se o cliente pedir o cardápio, o menu, "o que tem", os preços, etc. -> retorne action="enviar_cardapio".
+3. Você só fala português, em tom informal e direto, com no máximo 2-3 frases por mensagem.
+4. Pergunte uma coisa de cada vez. Não envie blocos longos.
+5. Quando o cliente disser o que quer, identifique itens do cardápio (use os IDs abaixo).
+6. Antes de fechar o pedido:
+   - Se o cliente NÃO pediu nenhuma porção de batata, ofereça batata uma única vez.
+   - Se o cliente NÃO pediu nenhuma bebida, ofereça bebida uma única vez.
+7. Pergunte se é RETIRADA ou ENTREGA.
+   - Retirada: NÃO peça endereço. Diga apenas que vai avisar quando estiver pronto.
+   - Entrega: peça o endereço completo (rua, número, bairro, ponto de referência se tiver).
+8. Pergunte a forma de pagamento (pix, dinheiro, cartão). Se for dinheiro, pergunte se precisa de troco e para quanto.
+9. Confirme o resumo do pedido (itens, total, tipo, pagamento) e só então retorne action="finalizar_pedido" com o JSON do pedido.
+10. Se o cliente apenas conversar (oi, bom dia, etc), responda educado, sem encher de informação.
+11. Taxa de entrega: R$ ${taxa.toFixed(2)} (some no total quando for entrega).${minimoTxt}
+
+CARDÁPIO (id | nome | preço):
+${cardapioParaPrompt()}
+
+FORMATO DE RESPOSTA (OBRIGATÓRIO):
+Responda SEMPRE com um único objeto JSON puro, sem markdown, sem texto fora do JSON, neste formato:
+
+{
+  "reply": "string - mensagem que será enviada ao cliente",
+  "action": "responder" | "enviar_cardapio" | "finalizar_pedido",
+  "estado": {
+    "ofereci_batata": boolean,
+    "ofereci_bebida": boolean,
+    "tipo": "retirada" | "entrega" | null,
+    "nome_cliente": "string | null",
+    "endereco": "string | null",
+    "bairro": "string | null",
+    "referencia": "string | null",
+    "pagamento": "pix" | "dinheiro" | "cartao" | null,
+    "troco_para": number | null
+  },
+  "pedido": {
+    "itens": [ { "id": number, "nome": "string", "preco": number, "qtd": number, "obs": "string" } ],
+    "subtotal": number,
+    "taxa_entrega": number,
+    "total": number
   }
-  return true;
 }
 
-function phoneKey(t) { return String(t || '').replace(/\D+/g, ''); }
-
-const PORT = process.env.PORT || 3000;
-const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN;
-
-// Fila simples por telefone para evitar processamento paralelo do mesmo cliente
-const filaPorTelefone = new Map();
-
-async function processarComFila(telefone, texto, pushName) {
-  const anterior = filaPorTelefone.get(telefone) || Promise.resolve();
-  const atual = anterior.then(async () => {
-    try {
-      // Salva mensagem do cliente
-      await adicionarMensagem(telefone, { role: 'user', texto, pushName });
-
-      // Mostra "digitando..."
-      mostrarDigitando(telefone, 2000).catch(() => {});
-
-      // Processa com Claude
-      const resposta = await processarMensagem(telefone, texto, pushName);
-
-      if (!resposta) {
-        console.log(`⏸ ${telefone} — conversa pausada para humano, não respondendo`);
-        return;
-      }
-
-      // Envia resposta
-      await enviarMensagem(telefone, resposta);
-
-      // Salva no histórico
-      await adicionarMensagem(telefone, { role: 'assistant', texto: resposta });
-    } catch (e) {
-      console.error(`❌ Erro ao processar ${telefone}:`, e);
-      try {
-        await enviarMensagem(
-          telefone,
-          'Ops, tive um probleminha aqui 😅 Pode tentar de novo daqui a pouquinho? Se preferir, diga "atendente" que chamo alguém pra te ajudar.'
-        );
-      } catch {}
-    }
-  });
-  filaPorTelefone.set(telefone, atual);
-  // Limpa a fila depois que termina (evita memory leak)
-  atual.finally(() => {
-    if (filaPorTelefone.get(telefone) === atual) {
-      filaPorTelefone.delete(telefone);
-    }
-  });
-  return atual;
+Se action != "finalizar_pedido", "pedido" pode ser objeto vazio {}. Sempre preencha "estado" com o que você sabe até agora.`;
 }
 
-// ── Health check ──
-app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    service: 'Esquina Burger Bot',
-    timestamp: new Date().toISOString(),
+// ============================================
+// GEMINI - chamada principal
+// ============================================
+async function chamarGemini(historico, novaMsg, estadoAtual) {
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.0-flash',
+    generationConfig: {
+      responseMimeType: 'application/json',
+      temperature: 0.6,
+    },
   });
-});
 
-// ── Webhook da Evolution API ──
-app.post('/webhook', async (req, res) => {
-  // Validação de token opcional
-  if (WEBHOOK_TOKEN) {
-    const token = req.headers['x-webhook-token'] || req.query.token;
-    if (token !== WEBHOOK_TOKEN) {
-      return res.status(401).json({ error: 'Token inválido' });
-    }
+  const contents = [];
+  contents.push({
+    role: 'user',
+    parts: [{ text: buildSystemPrompt(estadoAtual) }],
+  });
+  contents.push({
+    role: 'model',
+    parts: [{ text: '{"reply":"Ok, entendi as regras.","action":"responder","estado":{},"pedido":{}}' }],
+  });
+
+  for (const m of historico.slice(-HISTORY_LIMIT)) {
+    contents.push({
+      role: m.role === 'user' ? 'user' : 'model',
+      parts: [{ text: m.texto || m.content || '' }],
+    });
   }
 
-  // Responde rápido para a Evolution — processamento é assíncrono
-  res.json({ ok: true });
+  contents.push({
+    role: 'user',
+    parts: [{
+      text: `Estado atual da conversa (para você manter contexto): ${JSON.stringify(estadoAtual || {})}\n\nMensagem do cliente: ${novaMsg}`
+    }],
+  });
 
-  const evento = req.body?.event;
-  // Só processa mensagens recebidas
-  if (evento && evento !== 'messages.upsert' && evento !== 'MESSAGES_UPSERT') {
+  const resp = await model.generateContent({ contents });
+  const txt = resp.response.text();
+  try {
+    return JSON.parse(txt);
+  } catch (e) {
+    console.error('Falha ao parsear JSON do Gemini:', txt);
+    return {
+      reply: 'Opa, deixa eu ver isso aqui rapidinho 😅',
+      action: 'responder',
+      estado: estadoAtual || {},
+      pedido: {},
+    };
+  }
+}
+
+// ============================================
+// EVOLUTION API
+// ============================================
+function numeroLimpo(jid) {
+  return String(jid).replace('@s.whatsapp.net', '').replace('@c.us', '');
+}
+
+async function enviarTexto(phone, message) {
+  try {
+    await axios.post(
+      `${EVOLUTION_URL}/message/sendText/${INSTANCE_NAME}`,
+      { number: numeroLimpo(phone), text: message },
+      { headers: { apikey: EVOLUTION_API_KEY, 'Content-Type': 'application/json' } }
+    );
+    console.log(`✓ Texto enviado para ${phone}`);
+  } catch (err) {
+    console.error('Erro enviarTexto:', err.response?.data || err.message);
+  }
+}
+
+async function enviarImagem(phone, url, legenda = '') {
+  if (!url) {
+    return enviarTexto(phone, 'Desculpa, o cardápio em imagem ainda não está configurado. Me diga o que você quer que eu te ajudo!');
+  }
+  try {
+    await axios.post(
+      `${EVOLUTION_URL}/message/sendMedia/${INSTANCE_NAME}`,
+      {
+        number: numeroLimpo(phone),
+        mediatype: 'image',
+        media: url,
+        caption: legenda || 'Nosso cardápio 🍔',
+      },
+      { headers: { apikey: EVOLUTION_API_KEY, 'Content-Type': 'application/json' } }
+    );
+    console.log(`✓ Imagem enviada para ${phone}`);
+  } catch (err) {
+    console.error('Erro enviarImagem:', err.response?.data || err.message);
+    // fallback texto
+    await enviarTexto(phone, 'Te mando o cardápio em texto então:\n\n' + cardapioParaPrompt());
+  }
+}
+
+// ============================================
+// FIREBASE - conversa
+// ============================================
+async function lerConversa(phone) {
+  const snap = await get(ref(db, `bot_conversas/${phone}`));
+  return snap.exists() ? snap.val() : null;
+}
+
+async function salvarMensagem(phone, msg, nomeWhats) {
+  const conv = (await lerConversa(phone)) || {};
+  const mensagens = Array.isArray(conv.mensagens) ? conv.mensagens : [];
+  mensagens.push(msg);
+  await update(ref(db, `bot_conversas/${phone}`), {
+    nome: conv.nome || nomeWhats || phone,
+    nome_whatsapp: nomeWhats || conv.nome_whatsapp || '',
+    mensagens,
+    ultimaMsg: msg.texto || '',
+    atualizadoEm: Date.now(),
+    status: conv.status || 'ativo',
+  });
+}
+
+async function atualizarEstado(phone, estado) {
+  await update(ref(db, `bot_conversas/${phone}`), { estado });
+}
+
+// ============================================
+// FIREBASE - cliente
+// ============================================
+async function cadastrarCliente(phone, dados) {
+  const cli = {
+    id: Date.now(),
+    nome: dados.nome || '',
+    telefone: phone,
+    endereco: dados.endereco || '',
+    bairro: dados.bairro || '',
+    obs: dados.referencia || '',
+    aniversario: '',
+    fiadoHabilitado: false,
+    pedidos: 0,
+    totalGasto: 0,
+    ultimoPedido: null,
+    cadastro: new Date().toISOString(),
+  };
+  await set(ref(db, `clientes/${phone}`), cli);
+  return cli;
+}
+
+// ============================================
+// FIREBASE - pedido (schema esperado por importarPedidoBot)
+// ============================================
+async function criarPedido(phone, estado, pedido) {
+  const tipo = estado.tipo === 'entrega' ? 'delivery'
+             : estado.tipo === 'retirada' ? 'retirada'
+             : 'delivery';
+
+  const taxa = tipo === 'delivery' ? getDeliveryFee(estado.bairro) : 0;
+  const subtotal = pedido.subtotal || (pedido.itens || []).reduce((s,i)=>s+(i.preco*i.qtd),0);
+  const total = subtotal + taxa;
+
+  const obj = {
+    origem: 'whatsapp-bot',
+    criadoEm: Date.now(),
+    cliente: {
+      nome: estado.nome_cliente || '',
+      telefone: phone,
+      endereco: estado.endereco || '',
+      bairro: estado.bairro || '',
+      referencia: estado.referencia || '',
+    },
+    itens: (pedido.itens || []).map(i => ({
+      id: i.id || 0,
+      nome: i.nome,
+      preco: Number(i.preco) || 0,
+      qtd: Number(i.qtd) || 1,
+      obs: i.obs || '',
+      adicionais: i.adicionais || [],
+    })),
+    subtotal,
+    taxaEntrega: taxa,
+    total,
+    tipo,
+    pagamento: estado.pagamento || 'pix',
+    troco: estado.troco_para ? String(estado.troco_para) : '',
+  };
+
+  const novo = push(ref(db, 'pedidos_abertos'));
+  await set(novo, obj);
+  return novo.key;
+}
+
+// ============================================
+// PIPELINE PRINCIPAL
+// ============================================
+async function processarMensagem(phone, texto, nomeWhats) {
+  const conv = (await lerConversa(phone)) || {};
+
+  // Pausa humana - operador assumiu
+  if (conv.status === 'pausado_humano') {
+    console.log(`⏸  ${phone} pausado por humano - bot não responde`);
+    // Ainda salva a msg do cliente pra aparecer no PDV
+    await salvarMensagem(phone, {
+      role: 'user',
+      texto,
+      timestamp: Date.now(),
+    }, nomeWhats);
     return;
   }
 
-  const msg = parseWebhook(req.body);
-  if (!msg) return;
+  // Salva msg do cliente
+  await salvarMensagem(phone, {
+    role: 'user',
+    texto,
+    timestamp: Date.now(),
+  }, nomeWhats);
 
-  console.log(`📥 ${msg.telefone} (${msg.pushName || '?'}): ${msg.texto.slice(0, 80)}`);
+  const historico = (conv.mensagens || []).concat([{ role: 'user', texto }]);
+  const estado = conv.estado || {};
 
-  // Processa na fila
-  processarComFila(msg.telefone, msg.texto, msg.pushName).catch(e =>
-    console.error('Erro fila:', e)
-  );
-});
+  // Chama IA
+  const ia = await chamarGemini(historico, texto, estado);
 
-// ── Endpoint para testar o bot sem WhatsApp ──
-app.post('/test', async (req, res) => {
-  if (!checkBotToken(req, res)) return;
-  try {
-    const { telefone, texto, pushName } = req.body;
-    if (!telefone || !texto) {
-      return res.status(400).json({ error: 'telefone e texto são obrigatórios' });
+  // Atualiza estado
+  const novoEstado = { ...estado, ...(ia.estado || {}) };
+  if (!novoEstado.nome_cliente && nomeWhats) novoEstado.nome_cliente = nomeWhats;
+  await atualizarEstado(phone, novoEstado);
+
+  // Envia resposta
+  if (ia.reply) {
+    await enviarTexto(phone, ia.reply);
+    await salvarMensagem(phone, {
+      role: 'bot',
+      texto: ia.reply,
+      timestamp: Date.now(),
+    }, nomeWhats);
+  }
+
+  // Ações
+  if (ia.action === 'enviar_cardapio') {
+    await enviarImagem(phone, getMenuImageUrl(), 'Cardápio do ' + RESTAURANT_NAME);
+  }
+
+  if (ia.action === 'finalizar_pedido' && ia.pedido && (ia.pedido.itens || []).length) {
+    try {
+      // Cadastra cliente (sempre que tiver nome). Para entrega obrigatório.
+      if (novoEstado.nome_cliente) {
+        await cadastrarCliente(phone, {
+          nome: novoEstado.nome_cliente,
+          endereco: novoEstado.endereco,
+          bairro: novoEstado.bairro,
+          referencia: novoEstado.referencia,
+        });
+      }
+      const key = await criarPedido(phone, novoEstado, ia.pedido);
+      console.log(`✅ Pedido criado: ${key}`);
+      await update(ref(db, `bot_conversas/${phone}`), {
+        ultimoPedidoKey: key,
+        status: 'pedido_criado',
+      });
+    } catch (e) {
+      console.error('Erro ao criar pedido:', e);
     }
-    const resposta = await processarMensagem(telefone, texto, pushName);
-    res.json({ resposta });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
   }
-});
+}
 
-// ── API pra aba Atendimento do PDV ─────────────────────────────────
-
-// Lista todas as conversas (resumo)
-app.get('/conversas', async (req, res) => {
-  if (!checkBotToken(req, res)) return;
+// ============================================
+// POLLING DA EVOLUTION
+// ============================================
+async function pollMensagens() {
   try {
-    const todas = (await fb.get('bot_conversas')) || {};
-    const lista = Object.entries(todas).map(([tel, c]) => ({
-      telefone: tel,
-      nome: c?.nome || c?.cliente?.nome || c?.nome_whatsapp || '',
-      ultimaMsg: c?.ultimaMsg || '',
-      status: c?.status || 'ativo',
-      atualizadoEm: c?.atualizadoEm || c?.criadoEm || 0,
-      qtdMsgs: Array.isArray(c?.mensagens) ? c.mensagens.length : 0,
-    }));
-    lista.sort((a, b) => (b.atualizadoEm || 0) - (a.atualizadoEm || 0));
-    res.json({ conversas: lista });
+    const r = await axios.post(
+      `${EVOLUTION_URL}/chat/findMessages/${INSTANCE_NAME}`,
+      { where: {} },
+      { headers: { apikey: EVOLUTION_API_KEY, 'Content-Type': 'application/json' } }
+    );
+    const msgs = r.data?.messages?.records || r.data?.records || r.data || [];
+    for (const m of msgs) {
+      const id = m.key?.id || m.id;
+      if (!id || processedMessages.has(id)) continue;
+      if (m.key?.fromMe) { processedMessages.add(id); continue; }
+      const jid = m.key?.remoteJid;
+      if (!jid || jid.includes('@g.us')) { processedMessages.add(id); continue; }
+      const texto = m.message?.conversation
+                 || m.message?.extendedTextMessage?.text
+                 || '';
+      if (!texto) { processedMessages.add(id); continue; }
+      processedMessages.add(id);
+      const nome = m.pushName || '';
+      console.log(`📩 ${jid}: ${texto}`);
+      try {
+        await processarMensagem(numeroLimpo(jid), texto, nome);
+      } catch (e) {
+        console.error('Erro processarMensagem:', e);
+      }
+    }
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    if (e.response?.status !== 404) {
+      console.error('Erro polling:', e.response?.data || e.message);
+    }
   }
-});
+}
 
-// Detalhe de uma conversa
-app.get('/conversa/:telefone', async (req, res) => {
-  if (!checkBotToken(req, res)) return;
+// ============================================
+// WEBHOOK (preferencial se Evolution disparar)
+// ============================================
+app.post('/webhook', async (req, res) => {
   try {
-    const c = await getConversa(req.params.telefone);
-    res.json(c || { telefone: phoneKey(req.params.telefone), mensagens: [], status: 'ativo' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Pausa a IA pra um contato (humano assume)
-app.post('/pausar', async (req, res) => {
-  if (!checkBotToken(req, res)) return;
-  try {
-    const tel = phoneKey(req.body?.telefone);
-    if (!tel) return res.status(400).json({ error: 'telefone obrigatório' });
-    await salvarConversa(tel, { status: 'pausado_humano' });
-    res.json({ ok: true, telefone: tel, status: 'pausado_humano' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Retoma a IA pra um contato
-app.post('/retomar', async (req, res) => {
-  if (!checkBotToken(req, res)) return;
-  try {
-    const tel = phoneKey(req.body?.telefone);
-    if (!tel) return res.status(400).json({ error: 'telefone obrigatório' });
-    await salvarConversa(tel, { status: 'ativo' });
-    res.json({ ok: true, telefone: tel, status: 'ativo' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Envia uma mensagem manual pelo WhatsApp (humano respondendo)
-// Salva no histórico como role:assistant_humano pra diferenciar
-app.post('/send', async (req, res) => {
-  if (!checkBotToken(req, res)) return;
-  try {
-    const tel = phoneKey(req.body?.telefone);
-    const texto = String(req.body?.texto || '').trim();
-    if (!tel || !texto) return res.status(400).json({ error: 'telefone e texto obrigatórios' });
-
-    await enviarMensagem(tel, texto);
-    await adicionarMensagem(tel, { role: 'assistant', texto, manual: true });
+    const ev = req.body;
+    if (ev.event === 'messages.upsert' || ev.event === 'MESSAGES_UPSERT') {
+      const data = ev.data || {};
+      const list = Array.isArray(data) ? data : (data.messages || [data]);
+      for (const m of list) {
+        const id = m.key?.id;
+        if (!id || processedMessages.has(id)) continue;
+        if (m.key?.fromMe) { processedMessages.add(id); continue; }
+        const jid = m.key?.remoteJid;
+        if (!jid || jid.includes('@g.us')) { processedMessages.add(id); continue; }
+        const texto = m.message?.conversation
+                   || m.message?.extendedTextMessage?.text
+                   || '';
+        if (!texto) { processedMessages.add(id); continue; }
+        processedMessages.add(id);
+        await processarMensagem(numeroLimpo(jid), texto, m.pushName || '');
+      }
+    }
     res.json({ ok: true });
   } catch (e) {
+    console.error('Erro webhook:', e);
     res.status(500).json({ error: e.message });
   }
 });
 
-// Backup completo do Firebase (protegido) — usado pra snapshot local antes de mexer
-app.get('/backup', async (req, res) => {
-  if (!checkBotToken(req, res)) return;
-  try {
-    const snapshot = {
-      geradoEm: new Date().toISOString(),
-      bot_conversas: (await fb.get('bot_conversas')) || {},
-      clientes_bot:  (await fb.get('clientes_bot'))  || {},
-      pedidos_abertos: (await fb.get('pedidos_abertos')) || {},
-      clientes:  (await fb.get('clientes'))  || {},
-      produtos:  (await fb.get('produtos'))  || {},
-      pedidos:   (await fb.get('pedidos'))   || {},
-      config:    (await fb.get('config'))    || {},
-    };
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="firebase-backup.json"');
-    res.send(JSON.stringify(snapshot, null, 2));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+// ============================================
+// ENDPOINTS UTIL
+// ============================================
+app.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
+app.post('/test', async (req, res) => {
+  const { phone, texto, nome } = req.body || {};
+  if (!phone || !texto) return res.status(400).json({ error: 'phone e texto obrigatórios' });
+  await processarMensagem(phone, texto, nome || 'Teste');
+  res.json({ ok: true });
 });
 
-// Status geral do bot (pra aba Atendimento mostrar)
-app.get('/status', async (req, res) => {
-  res.json({
-    online: true,
-    instance: process.env.EVOLUTION_INSTANCE || '',
-    modelo: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
-    temGemini: !!process.env.GEMINI_API_KEY,
-    temEvolution: !!(process.env.EVOLUTION_URL && process.env.EVOLUTION_API_KEY),
-    temFirebase: !!process.env.FIREBASE_DB_URL,
-    timestamp: new Date().toISOString(),
-  });
-});
-
+// ============================================
+// START
+// ============================================
 app.listen(PORT, () => {
-  console.log(`🍔 Esquina Burger Bot rodando na porta ${PORT}`);
-  console.log(`   Webhook:    POST /webhook`);
-  console.log(`   Teste:      POST /test { telefone, texto }`);
-  console.log(`   Conversas:  GET  /conversas`);
-  console.log(`   Pausar:     POST /pausar { telefone }`);
-  console.log(`   Retomar:    POST /retomar { telefone }`);
-  console.log(`   Send:       POST /send { telefone, texto }`);
-  console.log(`   Status:     GET  /status`);
+  console.log(`✓ Bot ${RESTAURANT_NAME} rodando na porta ${PORT}`);
+  console.log(`✓ Evolution: ${EVOLUTION_URL} / instância ${INSTANCE_NAME}`);
+  console.log(`✓ Firebase: ${FIREBASE_DB_URL}`);
+  console.log(`✓ Cardápio e taxa de entrega vêm do PDV via Firebase (bot_config/*) em tempo real`);
+  if (POLL_INTERVAL_MS > 0) {
+    setInterval(pollMensagens, POLL_INTERVAL_MS);
+    pollMensagens();
+    console.log(`✓ Polling ativo a cada ${POLL_INTERVAL_MS}ms`);
+  }
 });
