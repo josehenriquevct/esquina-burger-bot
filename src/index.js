@@ -42,9 +42,12 @@ const HISTORY_LIMIT     = 20;
 // O bot escuta esses paths e atualiza essas variáveis automaticamente.
 let CARDAPIO_LIVE = [];
 let ENTREGA_CFG = { taxa: DEFAULT_DELIVERY_FEE, bairros: [], minimo: 0 };
-let BOT_CFG = { menuImageUrl: process.env.MENU_IMAGE_URL || '' };
-
-function getCardapio()    { return CARDAPIO_LIVE.length ? CARDAPIO_LIVE : CARDAPIO_FALLBACK; }
+let BOT_CFG = {
+     menuImageUrl: process.env.MENU_IMAGE_URL || '',
+     chavePix: process.env.PIX_KEY || '46.757.307/0001-32',
+     tipoChavePix: process.env.PIX_TIPO || 'CNPJ',
+     nomeRecebedor: process.env.PIX_NOME || 'Esquina Burger',
+   };function getCardapio()    { return CARDAPIO_LIVE.length ? CARDAPIO_LIVE : CARDAPIO_FALLBACK; }
 function getDeliveryFee(bairro) {
   if (bairro && Array.isArray(ENTREGA_CFG.bairros)) {
     const norm = (s) => String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
