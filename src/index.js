@@ -295,6 +295,7 @@ REGRAS DE COMPORTAMENTO (siga sempre):
 10. Se o cliente apenas conversar (oi, bom dia, etc), responda educado, sem encher de informação.
 10.1. COMPROVANTE DE PIX / IMAGEM / FOTO: se o pedido JÁ foi finalizado e o cliente mandar uma imagem, um comprovante, uma mensagem do tipo "paguei", "pago", "comprovante", "enviei o pix", "ta aí", "segue" ou qualquer confirmação de pagamento, NÃO abra pedido novo, NÃO peça itens, NÃO mostre cardápio. Apenas agradeça, confirme o recebimento e avise que já vai sair (ex: "Recebemos seu comprovante! Já tá saindo 🛵"). Retorne action="responder" e NUNCA action="finalizar_pedido" nessa situação.
 10.2. Se o estado atual já tem itens e tipo definidos, considere que há um pedido em andamento/finalizado — qualquer mensagem curta depois disso é sobre ESSE pedido, não um novo.
+10.3. ALTERAÇÃO DE PEDIDO: Se o cliente já fez um pedido e depois quer adicionar mais itens, remover algo, trocar item ou fazer qualquer alteração, ajude normalmente. Monte o pedido COMPLETO atualizado (todos os itens anteriores + as mudanças) e retorne action="finalizar_pedido" com o pedido completo. O sistema vai atualizar o pedido existente automaticamente.
 11. Taxa de entrega: R$ ${taxa.toFixed(2)} (some no total quando for entrega).${minimoTxt}
 13. ITENS ESGOTADOS: se um item do cardápio estiver marcado com "❌ ESGOTADO", NÃO o ofereça. Se o cliente pedir esse item, avise com simpatia: "Poxa, esse item tá esgotado no momento 😔. Mas temos outras opções ótimas!" e sugira algo similar. NUNCA inclua item esgotado no pedido.
 12. CHAVE PIX (use SEMPRE esta, NUNCA invente placeholder, NUNCA escreva "chavepixaleatoria" ou "CNPJ/CPF" genérico):
@@ -644,14 +645,14 @@ async function processarMensagem(phone, texto, nomeWhats) {
         return;
       }
     }
-    // TRAVA CONTRA DUPLICAÇÃO: se já criou um pedido pra esse telefone nos últimos 3min, ignora
+    // TRAVA CONTRA DUPLICAÇÃO RÁPIDA (10s) - permite alterações depois
     const ultimoCriadoEm = Number(conv.ultimoPedidoCriadoEm || 0);
-    if (ultimoCriadoEm && (Date.now() - ultimoCriadoEm) < PEDIDO_LOCK_MS) {
-      console.log(`⚠  Pedido duplicado ignorado para ${phone} (último há ${Math.round((Date.now()-ultimoCriadoEm)/1000)}s)`);
+    if (ultimoCriadoEm && (Date.now() - ultimoCriadoEm) < 10000) {
+      console.log(`⚠ Pedido duplicado ignorado para ${phone} (último há ${Math.round((Date.now()-ultimoCriadoEm)/1000)}s)`);
       return;
     }
+
     try {
-      // Cadastra cliente (sempre que tiver nome). Para entrega obrigatório.
       if (novoEstado.nome_cliente) {
         await cadastrarCliente(phone, {
           nome: novoEstado.nome_cliente,
@@ -660,15 +661,47 @@ async function processarMensagem(phone, texto, nomeWhats) {
           referencia: novoEstado.referencia,
         });
       }
-      const key = await criarPedido(phone, novoEstado, ia.pedido);
-      console.log(`✅ Pedido criado: ${key}`);
+
+      // Se já tem pedido recente (menos de 2h), ATUALIZA em vez de criar novo
+      const JANELA_ALTERACAO_MS = 2 * 60 * 60 * 1000;
+      const pedidoExistente = conv.ultimoPedidoKey;
+      const isAlteracao = pedidoExistente && ultimoCriadoEm && (Date.now() - ultimoCriadoEm) < JANELA_ALTERACAO_MS;
+
+      let key;
+      if (isAlteracao) {
+        const tipo = novoEstado.tipo === 'entrega' ? 'delivery' : novoEstado.tipo === 'retirada' ? 'retirada' : 'delivery';
+        const taxa = tipo === 'delivery' ? getDeliveryFee(novoEstado.bairro) : 0;
+        const subtotal = ia.pedido.subtotal || (ia.pedido.itens || []).reduce((s,i)=>s+(i.preco*i.qtd),0);
+        const total = subtotal + taxa;
+        await update(ref(db, `pedidos_abertos/${pedidoExistente}`), {
+          itens: (ia.pedido.itens || []).map(i => ({
+            id: i.id || 0, nome: i.nome, preco: Number(i.preco) || 0,
+            qtd: Number(i.qtd) || 1, obs: i.obs || '', adicionais: i.adicionais || [],
+          })),
+          subtotal, taxaEntrega: taxa, total, tipo,
+          pagamento: novoEstado.pagamento || 'pix',
+          troco: novoEstado.troco_para ? String(novoEstado.troco_para) : '',
+          cliente: {
+            nome: novoEstado.nome_cliente || '', telefone: phone,
+            endereco: novoEstado.endereco || '', bairro: novoEstado.bairro || '',
+            referencia: novoEstado.referencia || '',
+          },
+          alteradoEm: Date.now(),
+        });
+        key = pedidoExistente;
+        console.log(`✏️ Pedido atualizado: ${key}`);
+      } else {
+        key = await criarPedido(phone, novoEstado, ia.pedido);
+        console.log(`✅ Pedido criado: ${key}`);
+      }
+
       await update(ref(db, `bot_conversas/${phone}`), {
         ultimoPedidoKey: key,
         ultimoPedidoCriadoEm: Date.now(),
         status: 'pedido_criado',
       });
     } catch (e) {
-      console.error('Erro ao criar pedido:', e);
+      console.error('Erro ao criar/atualizar pedido:', e);
     }
   }
 }
