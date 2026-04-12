@@ -148,9 +148,10 @@ function cardapioParaPrompt() {
   });
   return cats.map(cat => {
     const head = `── ${cat.toUpperCase()} ──`;
-    const linhas = grupos[cat].map(i =>
-      `${i.id} | ${i.nome}${i.desc ? ' — '+i.desc : ''} | R$ ${Number(i.preco).toFixed(2)}`
-    ).join('\n');
+    const linhas = grupos[cat].map(i => {
+      const esgotado = !!(i.esgotado || (i.controlaEstoque && (Number(i.estoque)||0) <= 0));
+      return `${i.id} | ${i.nome}${i.desc ? ' — '+i.desc : ''} | R$ ${Number(i.preco).toFixed(2)}${esgotado ? ' | ❌ ESGOTADO' : ''}`;
+    }).join('\n');
     return head + '\n' + linhas;
   }).join('\n');
 }
@@ -261,6 +262,7 @@ REGRAS DE COMPORTAMENTO (siga sempre):
 10.1. COMPROVANTE DE PIX / IMAGEM / FOTO: se o pedido JÁ foi finalizado e o cliente mandar uma imagem, um comprovante, uma mensagem do tipo "paguei", "pago", "comprovante", "enviei o pix", "ta aí", "segue" ou qualquer confirmação de pagamento, NÃO abra pedido novo, NÃO peça itens, NÃO mostre cardápio. Apenas agradeça, confirme o recebimento e avise que já vai sair (ex: "Recebemos seu comprovante! Já tá saindo 🛵"). Retorne action="responder" e NUNCA action="finalizar_pedido" nessa situação.
 10.2. Se o estado atual já tem itens e tipo definidos, considere que há um pedido em andamento/finalizado — qualquer mensagem curta depois disso é sobre ESSE pedido, não um novo.
 11. Taxa de entrega: R$ ${taxa.toFixed(2)} (some no total quando for entrega).${minimoTxt}
+13. ITENS ESGOTADOS: se um item do cardápio estiver marcado com "❌ ESGOTADO", NÃO o ofereça. Se o cliente pedir esse item, avise com simpatia: "Poxa, esse item tá esgotado no momento 😔. Mas temos outras opções ótimas!" e sugira algo similar. NUNCA inclua item esgotado no pedido.
 12. CHAVE PIX (use SEMPRE esta, NUNCA invente placeholder, NUNCA escreva "chavepixaleatoria" ou "CNPJ/CPF" genérico):
     - Tipo: ${BOT_CFG.tipoChavePix || 'CNPJ'}
     - Chave: ${BOT_CFG.chavePix || '46.757.307/0001-32'}
@@ -561,6 +563,25 @@ async function processarMensagem(phone, texto, nomeWhats) {
       novoEstado.endereco = null;
       novoEstado.bairro = null;
       novoEstado.referencia = null;
+    }
+    // 📦 TRAVA DE ESTOQUE: remove itens esgotados do pedido
+    const cardapio = getCardapio();
+    if (ia.pedido.itens && ia.pedido.itens.length) {
+      ia.pedido.itens = ia.pedido.itens.filter(item => {
+        const cat = cardapio.find(c => c.id === item.id);
+        if (cat && cat.esgotado) {
+          console.log(`📦 ${phone} - removendo item esgotado do pedido: ${item.nome}`);
+          return false;
+        }
+        return true;
+      });
+      if (!ia.pedido.itens.length) {
+        console.log(`📦 ${phone} - pedido ficou vazio após remover esgotados`);
+        const msg = 'Poxa, os itens que você pediu estão todos esgotados no momento 😔. Quer ver o cardápio pra escolher outra coisa?';
+        await enviarTexto(phone, msg);
+        await salvarMensagem(phone, { role: 'bot', texto: msg, timestamp: Date.now() }, nomeWhats);
+        return;
+      }
     }
     // TRAVA CONTRA DUPLICAÇÃO: se já criou um pedido pra esse telefone nos últimos 3min, ignora
     const ultimoCriadoEm = Number(conv.ultimoPedidoCriadoEm || 0);
