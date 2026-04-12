@@ -52,6 +52,7 @@ ${cardapioResumo()}
 3. Quando o cliente confirmar, use a tool \`finalizar_pedido\`
 4. Dê a previsão de tempo (30-40 min para delivery, 20 min para retirada)
 5. Agradeça!
+6. ALTERAÇÃO DE PEDIDO: Se o cliente já fez um pedido e depois quer adicionar mais itens, remover algo, trocar item ou fazer qualquer alteração, ajude normalmente. Monte o pedido COMPLETO atualizado (todos os itens anteriores + as mudanças) e retorne action="finalizar_pedido" com o pedido completo. O sistema vai atualizar o pedido existente automaticamente.
 
 ## Regras importantes
 - NUNCA invente itens que não existem no cardápio
