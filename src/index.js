@@ -226,6 +226,40 @@ function subscribeBotConfig() {
 }
 subscribeBotConfig();
 
+// ============================================
+// NOTIFICAÇÕES DO PDV (saiu para entrega, etc)
+// ============================================
+function subscribeNotificacoes() {
+  onValue(ref(db, 'bot_notificacoes'), (snap) => {
+    const all = snap.val();
+    if (!all || typeof all !== 'object') return;
+    Object.entries(all).forEach(async ([key, notif]) => {
+      if (!notif || notif.enviado) return;
+      try {
+        const phone = String(notif.telefone || '').replace(/\D/g, '');
+        if (!phone || !notif.mensagem) return;
+        console.log(`📨 Enviando notificação ${key} para ${phone}`);
+        await enviarTexto(phone, notif.mensagem);
+        await salvarMensagem(phone, { role: 'bot', texto: notif.mensagem, timestamp: Date.now() });
+        // Marca como enviado e guarda pedidoId pra rastrear confirmação
+        await update(ref(db, `bot_notificacoes/${key}`), { enviado: true, enviadoEm: Date.now() });
+        // Se é notificação de saiu_entrega, salva na conversa do cliente pra saber que aguarda confirmação
+        if (notif.tipo === 'saiu_entrega' && notif.pedidoId) {
+          await update(ref(db, `bot_conversas/${phone}`), {
+            aguardandoConfirmacao: true,
+            pedidoIdConfirmacao: notif.pedidoId,
+            confirmacaoDesde: Date.now()
+          });
+          console.log(`📨 ${phone} aguardando confirmação de entrega do pedido #${notif.pedidoId}`);
+        }
+      } catch (e) {
+        console.error(`📨 Erro enviando notificação ${key}:`, e.message);
+      }
+    });
+  }, (err) => console.error('subscribe notificacoes:', err.message));
+}
+subscribeNotificacoes();
+
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 
@@ -526,6 +560,33 @@ async function processarMensagem(phone, texto, nomeWhats) {
       console.log(`🌙 ${phone} - fora do horário, já avisou há ${Math.round((agoraTs-ultimoAviso)/60000)}min, silêncio`);
     }
     return;
+  }
+
+  // 🛵 CONFIRMAÇÃO DE ENTREGA: se o cliente está aguardando confirmação e mandou algo que parece "chegou"
+  if (conv.aguardandoConfirmacao && conv.pedidoIdConfirmacao) {
+    const textoLower = texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const confirmaPatterns = /cheg(ou|amo|uei)|receb(i|ido|emos)|ja (ta|esta|chegou)|ok.*cheg|confirm|ta aqui|tô aqui|to aqui|ja peguei|peguei|beleza|tudo certo|recebi sim|obrigad/i;
+    if (confirmaPatterns.test(textoLower)) {
+      console.log(`🛵 ${phone} confirmou entrega do pedido #${conv.pedidoIdConfirmacao}`);
+      const msg = `Show! Que bom que chegou certinho! 😄🎉 Obrigado pela preferência e bom apetite! 🍔`;
+      await enviarTexto(phone, msg);
+      await salvarMensagem(phone, { role: 'bot', texto: msg, timestamp: Date.now() }, nomeWhats);
+      // Notifica PDV via Firebase que entrega foi confirmada
+      const confirmKey = 'confirm_' + Date.now() + '_' + conv.pedidoIdConfirmacao;
+      await set(ref(db, `bot_confirmacoes/${confirmKey}`), {
+        telefone: phone,
+        pedidoId: conv.pedidoIdConfirmacao,
+        confirmadoEm: Date.now(),
+        textoCliente: texto
+      });
+      // Limpa flag de aguardando
+      await update(ref(db, `bot_conversas/${phone}`), {
+        aguardandoConfirmacao: false,
+        pedidoIdConfirmacao: null,
+        confirmacaoDesde: null
+      });
+      return;
+    }
   }
 
   const historico = (conv.mensagens || []).concat([{ role: 'user', texto }]);
