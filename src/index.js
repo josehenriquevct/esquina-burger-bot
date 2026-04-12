@@ -52,7 +52,38 @@ let BOT_CFG = {
   chavePix: process.env.PIX_KEY || '46.757.307/0001-32',
   tipoChavePix: process.env.PIX_TIPO || 'CNPJ',
   nomeRecebedor: process.env.PIX_NOME || 'Esquina Burger',
+  // Horário de funcionamento (configurável via PDV)
+  horarioAtivo: true,        // se false, aceita pedido 24h
+  horaAbertura: '18:00',     // HH:MM
+  horaFechamento: '23:30',   // HH:MM (se < abertura, entende que vira o dia)
+  diasFuncionamento: [0,1,2,3,4,5,6], // 0=dom, 1=seg, ... 6=sab
+  msgFechado: 'Opa! Nosso atendimento já encerrou por hoje 😴. Abrimos todo dia das 18h às 23h30. Valeu pela preferência, te esperamos!',
 };
+
+// Verifica se o restaurante está aberto AGORA (no fuso local do servidor)
+function estaAberto() {
+  if (!BOT_CFG.horarioAtivo) return true;
+  const agora = new Date();
+  // Fuso Brasil (UTC-3)
+  const brasil = new Date(agora.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+  const dia = brasil.getDay();
+  const hhmm = brasil.getHours() * 60 + brasil.getMinutes();
+  const dias = Array.isArray(BOT_CFG.diasFuncionamento) ? BOT_CFG.diasFuncionamento : [0,1,2,3,4,5,6];
+  if (!dias.includes(dia)) return false;
+  const parse = (s) => {
+    const [h,m] = String(s||'').split(':').map(Number);
+    return (h||0)*60 + (m||0);
+  };
+  const abre = parse(BOT_CFG.horaAbertura);
+  const fecha = parse(BOT_CFG.horaFechamento);
+  if (fecha > abre) {
+    // Mesmo dia: aberto entre abre e fecha
+    return hhmm >= abre && hhmm < fecha;
+  } else {
+    // Vira o dia: ex: 18:00 até 02:00
+    return hhmm >= abre || hhmm < fecha;
+  }
+}
 
 function getCardapio()    { return CARDAPIO_LIVE.length ? CARDAPIO_LIVE : CARDAPIO_FALLBACK; }
 function getDeliveryFee(bairro) {
@@ -179,8 +210,13 @@ function subscribeBotConfig() {
         chavePix: v.chavePix || '46.757.307/0001-32',
         tipoChavePix: v.tipoChavePix || 'CNPJ',
         nomeRecebedor: v.nomeRecebedor || 'Esquina Burger',
+        horarioAtivo: v.horarioAtivo !== false,
+        horaAbertura: v.horaAbertura || '18:00',
+        horaFechamento: v.horaFechamento || '23:30',
+        diasFuncionamento: Array.isArray(v.diasFuncionamento) ? v.diasFuncionamento : [0,1,2,3,4,5,6],
+        msgFechado: v.msgFechado || 'Opa! Nosso atendimento já encerrou por hoje 😴. Abrimos todo dia das 18h às 23h30. Valeu pela preferência, te esperamos!',
       };
-      console.log(`✓ Bot config sincronizada: imagem ${BOT_CFG.menuImageUrl ? 'OK' : 'NÃO'} | Pix ${BOT_CFG.chavePix}`);
+      console.log(`✓ Bot config sincronizada: imagem ${BOT_CFG.menuImageUrl ? 'OK' : 'NÃO'} | Pix ${BOT_CFG.chavePix} | horário ${BOT_CFG.horaAbertura}-${BOT_CFG.horaFechamento} ativo=${BOT_CFG.horarioAtivo}`);
     }
   }, (err) => console.error('subscribe bot:', err.message));
 }
@@ -466,6 +502,23 @@ async function processarMensagem(phone, texto, nomeWhats) {
     texto,
     timestamp: Date.now(),
   }, nomeWhats);
+
+  // 🕐 VERIFICAÇÃO DE HORÁRIO: se fora do expediente, responde fechado e não processa pedido
+  if (!estaAberto()) {
+    // Anti-spam: só avisa 1x por hora (pra não encher o saco se o cara mandar 10 msgs)
+    const agoraTs = Date.now();
+    const ultimoAviso = Number(conv.ultimoAvisoFechado || 0);
+    if (agoraTs - ultimoAviso > 60 * 60 * 1000) {
+      const msg = BOT_CFG.msgFechado || 'Estamos fechados no momento. Volte no horário de atendimento!';
+      await enviarTexto(phone, msg);
+      await salvarMensagem(phone, { role: 'bot', texto: msg, timestamp: agoraTs }, nomeWhats);
+      await update(ref(db, `bot_conversas/${phone}`), { ultimoAvisoFechado: agoraTs });
+      console.log(`🌙 ${phone} - fora do horário, avisou fechado`);
+    } else {
+      console.log(`🌙 ${phone} - fora do horário, já avisou há ${Math.round((agoraTs-ultimoAviso)/60000)}min, silêncio`);
+    }
+    return;
+  }
 
   const historico = (conv.mensagens || []).concat([{ role: 'user', texto }]);
   const estado = conv.estado || {};
