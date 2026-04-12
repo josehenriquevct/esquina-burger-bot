@@ -58,6 +58,8 @@ let BOT_CFG = {
   horaFechamento: '23:30',   // HH:MM (se < abertura, entende que vira o dia)
   diasFuncionamento: [0,1,2,3,4,5,6], // 0=dom, 1=seg, ... 6=sab
   msgFechado: 'Opa! Nosso atendimento já encerrou por hoje 😴. Abrimos todo dia das 18h às 23h30. Valeu pela preferência, te esperamos!',
+  // Entrega: quando false, bot só aceita retirada (ex: folga do entregador)
+  entregaAtiva: true,
 };
 
 // Verifica se o restaurante está aberto AGORA (no fuso local do servidor)
@@ -215,8 +217,9 @@ function subscribeBotConfig() {
         horaFechamento: v.horaFechamento || '23:30',
         diasFuncionamento: Array.isArray(v.diasFuncionamento) ? v.diasFuncionamento : [0,1,2,3,4,5,6],
         msgFechado: v.msgFechado || 'Opa! Nosso atendimento já encerrou por hoje 😴. Abrimos todo dia das 18h às 23h30. Valeu pela preferência, te esperamos!',
+        entregaAtiva: v.entregaAtiva !== false,
       };
-      console.log(`✓ Bot config sincronizada: imagem ${BOT_CFG.menuImageUrl ? 'OK' : 'NÃO'} | Pix ${BOT_CFG.chavePix} | horário ${BOT_CFG.horaAbertura}-${BOT_CFG.horaFechamento} ativo=${BOT_CFG.horarioAtivo}`);
+      console.log(`✓ Bot config sincronizada: imagem ${BOT_CFG.menuImageUrl ? 'OK' : 'NÃO'} | Pix ${BOT_CFG.chavePix} | horário ${BOT_CFG.horaAbertura}-${BOT_CFG.horaFechamento} ativo=${BOT_CFG.horarioAtivo} | entrega=${BOT_CFG.entregaAtiva}`);
     }
   }, (err) => console.error('subscribe bot:', err.message));
 }
@@ -234,7 +237,12 @@ function buildSystemPrompt(estado) {
   const taxa = getDeliveryFee(estado?.bairro);
   const minimo = ENTREGA_CFG.minimo || 0;
   const minimoTxt = minimo > 0 ? `\n11.1. O pedido mínimo para entrega é R$ ${minimo.toFixed(2)}. Se o cliente pedir entrega abaixo desse valor, avise educadamente.` : '';
+  const entregaOff = !BOT_CFG.entregaAtiva;
+  const regraEntrega = entregaOff
+    ? `⚠️ ATENÇÃO IMPORTANTÍSSIMA: HOJE NÃO ESTAMOS FAZENDO ENTREGA (o entregador está de folga). Só aceitamos RETIRADA no local. Se o cliente pedir entrega/delivery, explique com simpatia: "Opa, hoje o entregador tá de folga e infelizmente não tô fazendo entrega 😔. Mas se preferir retirar no local é super rápido, em poucos minutos já tá pronto pra você buscar!" NUNCA aceite pedido de entrega hoje. Se insistir, reforce que só retirada. O campo "tipo" no estado DEVE ser sempre "retirada" — jamais "entrega".`
+    : '';
   return `Você é o atendente virtual do restaurante "${RESTAURANT_NAME}" no WhatsApp.
+${regraEntrega}
 Sua função é tirar pedidos rapidamente e de forma simpática.
 
 REGRAS DE COMPORTAMENTO (siga sempre):
@@ -246,9 +254,7 @@ REGRAS DE COMPORTAMENTO (siga sempre):
 6. Antes de fechar o pedido:
    - Se o cliente NÃO pediu nenhuma porção de batata, ofereça batata uma única vez.
    - Se o cliente NÃO pediu nenhuma bebida, ofereça bebida uma única vez.
-7. Pergunte se é RETIRADA ou ENTREGA.
-   - Retirada: NÃO peça endereço. Diga apenas que vai avisar quando estiver pronto.
-   - Entrega: peça o endereço completo (rua, número, bairro, ponto de referência se tiver).
+7. ${entregaOff ? 'NÃO pergunte se é retirada ou entrega — hoje SÓ EXISTE RETIRADA. Informe isso diretamente ao cliente e siga o pedido como retirada. NÃO peça endereço.' : 'Pergunte se é RETIRADA ou ENTREGA.\n   - Retirada: NÃO peça endereço. Diga apenas que vai avisar quando estiver pronto.\n   - Entrega: peça o endereço completo (rua, número, bairro, ponto de referência se tiver).'}
 8. Pergunte a forma de pagamento (pix, dinheiro, cartão). Se for dinheiro, pergunte se precisa de troco e para quanto.
 9. Confirme o resumo do pedido (itens, total, tipo, pagamento) e só então retorne action="finalizar_pedido" com o JSON do pedido.
 10. Se o cliente apenas conversar (oi, bom dia, etc), responda educado, sem encher de informação.
@@ -547,6 +553,15 @@ async function processarMensagem(phone, texto, nomeWhats) {
   }
 
   if (ia.action === 'finalizar_pedido' && ia.pedido && (ia.pedido.itens || []).length) {
+    // 🚚 TRAVA DE ENTREGA: se entrega desligada e Gemini tentou finalizar como entrega, força retirada
+    if (!BOT_CFG.entregaAtiva && (novoEstado.tipo === 'entrega' || ia.pedido.tipo === 'entrega')) {
+      console.log(`🚚 ${phone} - entrega desligada, forçando retirada`);
+      novoEstado.tipo = 'retirada';
+      ia.pedido.tipo = 'retirada';
+      novoEstado.endereco = null;
+      novoEstado.bairro = null;
+      novoEstado.referencia = null;
+    }
     // TRAVA CONTRA DUPLICAÇÃO: se já criou um pedido pra esse telefone nos últimos 3min, ignora
     const ultimoCriadoEm = Number(conv.ultimoPedidoCriadoEm || 0);
     if (ultimoCriadoEm && (Date.now() - ultimoCriadoEm) < PEDIDO_LOCK_MS) {
