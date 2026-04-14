@@ -143,16 +143,18 @@ app.post('/webhook', async (req, res) => {
 
   console.log(`📥 ${msg.telefone} (${msg.pushName || '?'}): ${msg.texto.slice(0, 80)}`);
 
-  // Se o cliente mandou localização, salva no Firebase e confirma
+  // Se o cliente mandou localização, salva no Firebase com link do Maps
   if (msg.localizacao) {
     try {
+      const mapsLink = `https://www.google.com/maps?q=${msg.localizacao.lat},${msg.localizacao.lng}`;
       await upsertCliente({
         telefone: msg.telefone,
-        endereco: 'Localização',
+        endereco: msg.localizacao.endereco || msg.localizacao.nome || 'Localização GPS',
         localizacao: msg.localizacao,
+        mapsLink: mapsLink,
       });
       await adicionarMensagem(msg.telefone, { role: 'user', texto: msg.texto, pushName: msg.pushName });
-      console.log(`📍 Localização recebida de ${msg.telefone}: ${msg.localizacao.lat}, ${msg.localizacao.lng}`);
+      console.log(`📍 Localização recebida de ${msg.telefone}: ${msg.localizacao.lat}, ${msg.localizacao.lng} → ${mapsLink}`);
     } catch (e) {
       console.error('Erro ao salvar localização:', e.message);
     }
@@ -321,6 +323,27 @@ app.post('/entrega', async (req, res) => {
     await fb.put('config', config);
     console.log(`🚚 Entrega ${ativa ? 'ATIVADA' : 'DESATIVADA'}`);
     res.json({ ok: true, entrega_ativa: ativa });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Localização de um cliente (pro entregador) ──
+app.get('/localizacao/:telefone', async (req, res) => {
+  if (!checkBotToken(req, res)) return;
+  try {
+    const tel = phoneKey(req.params.telefone);
+    const cliente = await fb.get(`clientes_bot/${tel}`);
+    if (!cliente) return res.status(404).json({ error: 'Cliente não encontrado' });
+    const loc = cliente.localizacao;
+    const mapsLink = loc?.lat && loc?.lng ? `https://www.google.com/maps?q=${loc.lat},${loc.lng}` : '';
+    res.json({
+      telefone: tel,
+      nome: cliente.nome || '',
+      endereco: cliente.endereco || '',
+      bairro: cliente.bairro || '',
+      referencia: cliente.referencia || '',
+      localizacao: loc || null,
+      mapsLink: mapsLink,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
