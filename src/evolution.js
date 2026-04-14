@@ -1,5 +1,6 @@
 // Cliente para a Evolution API (WhatsApp)
 // Docs: https://doc.evolution-api.com/
+
 import fetch from 'node-fetch';
 
 const URL = (process.env.EVOLUTION_URL || '').replace(/\/$/, '');
@@ -43,6 +44,29 @@ export async function enviarMensagem(telefone, texto) {
     console.log(`📤 → ${numero}: ${texto.slice(0, 60)}${texto.length > 60 ? '...' : ''}`);
   } catch (e) {
     console.error('Erro ao enviar mensagem:', e.message);
+    throw e;
+  }
+}
+
+/**
+ * Envia uma imagem para um número via WhatsApp
+ * @param {string} telefone - número com DDI+DDD (só dígitos)
+ * @param {string} imageUrl - URL pública da imagem
+ * @param {string} caption - legenda opcional
+ */
+export async function enviarImagem(telefone, imageUrl, caption = '') {
+  const numero = String(telefone).replace(/\D+/g, '');
+  try {
+    await evoReq(`/message/sendMedia/${INSTANCE}`, 'POST', {
+      number: numero,
+      mediatype: 'image',
+      media: imageUrl,
+      caption: caption,
+      delay: 300,
+    });
+    console.log(`🖼 → ${numero}: [imagem] ${caption.slice(0, 40)}`);
+  } catch (e) {
+    console.error('Erro ao enviar imagem:', e.message);
     throw e;
   }
 }
@@ -116,9 +140,9 @@ export function parseWebhook(body) {
       const nome = msg.locationMessage.name || '';
       const endereco = msg.locationMessage.address || '';
       localizacao = { lat, lng, nome, endereco };
-      texto = `[LOCALIZAÇÃO RECEBIDA] Latitude: ${lat}, Longitude: ${lng}` +
-              (nome ? `, Nome: ${nome}` : '') +
-              (endereco ? `, Endereço: ${endereco}` : '');
+      texto = `[LOCALIZAÇÃO RECEBIDA] Latitude: ${lat}, Longitude: ${lng}`
+        + (nome ? `, Nome: ${nome}` : '')
+        + (endereco ? `, Endereço: ${endereco}` : '');
     }
     else if (msg.imageMessage?.caption) texto = '[imagem] ' + (msg.imageMessage.caption || '');
     else if (msg.imageMessage) texto = '[imagem enviada]';
@@ -132,7 +156,6 @@ export function parseWebhook(body) {
     else return null;
 
     const pushName = data.pushName || data.notifyName || '';
-
     return { telefone, texto: texto.trim(), pushName, localizacao };
   } catch (e) {
     console.error('Erro parseWebhook:', e);

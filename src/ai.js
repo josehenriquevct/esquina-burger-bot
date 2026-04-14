@@ -1,14 +1,19 @@
 // Integração com Google Gemini com function calling
 // Cada cliente tem seu histórico em memória + Firebase
+
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { systemPrompt } from './prompts.js';
 import { CARDAPIO, buscarItem } from './cardapio.js';
 import { criarPedidoAberto, upsertCliente, salvarConversa, getConversa, fb } from './firebase.js';
+import { enviarImagem } from './evolution.js';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// gemini-2.0-flash: rápido, barato, generoso no tier grátis, suporta tool use + áudio
-const MODELO = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+// gemini-2.5-flash: rápido, barato, generoso no tier grátis, suporta tool use + áudio
+const MODELO = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+
+// URL da imagem do cardápio (hospedada no GitHub)
+const CARDAPIO_IMG_URL = process.env.CARDAPIO_IMG_URL || 'https://raw.githubusercontent.com/josehenriquevct/esquina-burger-bot/main/cardapio.png';
 
 /**
  * Transcreve áudio usando Gemini (multimodal)
@@ -19,7 +24,6 @@ const MODELO = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 export async function transcreverAudio(base64Audio, mimetype = 'audio/ogg') {
   try {
     const model = genAI.getGenerativeModel({ model: MODELO });
-
     const result = await model.generateContent([
       {
         inlineData: {
@@ -60,7 +64,7 @@ function limparEstado(telefone) {
   dadosClientes.delete(telefone);
 }
 
-// ── Definição das tools (formato Gemini) ────────────────────────
+// ── Definição das tools (formato Gemini) ──────────────────────────
 const TOOLS = [{
   functionDeclarations: [
     {
@@ -76,6 +80,14 @@ const TOOLS = [{
           },
         },
         required: ['categoria'],
+      },
+    },
+    {
+      name: 'enviar_foto_cardapio',
+      description: 'Envia a foto/imagem do cardápio completo para o cliente pelo WhatsApp. Use SEMPRE que o cliente pedir para ver o cardápio, o menu, ou perguntar "o que vocês têm". Envie a foto E depois liste as categorias em texto.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {},
       },
     },
     {
@@ -183,16 +195,25 @@ async function executarTool(telefone, nome, args) {
       };
     }
 
+    case 'enviar_foto_cardapio': {
+      try {
+        await enviarImagem(telefone, CARDAPIO_IMG_URL, 'Nosso cardápio completo! 🍔🔥');
+        console.log(`🖼 Foto do cardápio enviada para ${telefone}`);
+        return { sucesso: true, mensagem: 'Foto do cardápio enviada com sucesso' };
+      } catch (e) {
+        console.error('Erro ao enviar foto do cardápio:', e.message);
+        return { sucesso: false, erro: 'Não consegui enviar a foto, mas posso listar os itens em texto' };
+      }
+    }
+
     case 'adicionar_item': {
       const item = buscarItem(args.nome_ou_id);
       if (!item) return { sucesso: false, erro: `Item "${args.nome_ou_id}" não encontrado no cardápio. Peça para o cliente escolher outro.` };
+
       const qtd = Math.max(1, parseInt(args.quantidade || 1));
       carrinho.push({
-        id: item.id,
-        nome: item.nome,
-        preco: item.preco,
-        qtd,
-        obs: args.observacao || '',
+        id: item.id, nome: item.nome, preco: item.preco,
+        qtd, obs: args.observacao || '',
         subtotal: item.preco * qtd,
       });
       return {
@@ -217,9 +238,7 @@ async function executarTool(telefone, nome, args) {
       const taxa = dados.tipo === 'delivery' ? parseFloat(process.env.TAXA_ENTREGA || '5') : 0;
       return {
         itens: carrinho.map(i => ({ qtd: i.qtd, nome: i.nome, preco: i.preco, obs: i.obs, subtotal: i.subtotal })),
-        subtotal,
-        taxa_entrega: taxa,
-        total: subtotal + taxa,
+        subtotal, taxa_entrega: taxa, total: subtotal + taxa,
         tipo: dados.tipo || '',
         cliente: { nome: dados.nome || '', endereco: dados.endereco || '', bairro: dados.bairro || '', pagamento: dados.pagamento || '' },
       };
@@ -241,7 +260,9 @@ async function executarTool(telefone, nome, args) {
           if (config.entrega_ativa === false) {
             return { sucesso: false, erro: 'Entrega DESATIVADA hoje. Ofereça apenas retirada ou salão ao cliente.' };
           }
-        } catch (e) { console.warn('Erro ao checar config entrega:', e.message); }
+        } catch (e) {
+          console.warn('Erro ao checar config entrega:', e.message);
+        }
       }
       dados.tipo = args.tipo;
       return { sucesso: true, tipo: args.tipo };
@@ -265,38 +286,21 @@ async function executarTool(telefone, nome, args) {
 
       try {
         await upsertCliente({
-          nome: dados.nome,
-          telefone: dados.telefone,
-          endereco: dados.endereco || '',
-          bairro: dados.bairro || '',
-          referencia: dados.referencia || '',
+          nome: dados.nome, telefone: dados.telefone,
+          endereco: dados.endereco || '', bairro: dados.bairro || '', referencia: dados.referencia || '',
         });
       } catch (e) { console.warn('upsertCliente falhou:', e.message); }
 
       const pedido = {
         itens: carrinho.map(i => ({
-          id: i.id,
-          nome: i.nome,
-          preco: i.preco,
-          qtd: i.qtd,
-          obs: i.obs || '',
-          subtotal: i.subtotal,
+          id: i.id, nome: i.nome, preco: i.preco, qtd: i.qtd, obs: i.obs || '', subtotal: i.subtotal,
         })),
-        subtotal,
-        taxa,
-        desconto: 0,
-        total,
-        tipo: dados.tipo,
-        pagamento: dados.pagamento,
-        troco: dados.troco || '',
+        subtotal, taxa, desconto: 0, total, tipo: dados.tipo,
+        pagamento: dados.pagamento, troco: dados.troco || '',
         cliente: {
-          nome: dados.nome,
-          telefone: dados.telefone,
-          endereco: dados.endereco || '',
-          bairro: dados.bairro || '',
-          referencia: dados.referencia || '',
-          logado: false,
-          nivel: 'novo',
+          nome: dados.nome, telefone: dados.telefone,
+          endereco: dados.endereco || '', bairro: dados.bairro || '', referencia: dados.referencia || '',
+          logado: false, nivel: 'novo',
         },
       };
 
@@ -323,7 +327,7 @@ async function executarTool(telefone, nome, args) {
   }
 }
 
-// ── Processa uma mensagem do cliente ────────────────────────────
+// ── Processa uma mensagem do cliente ──────────────────────────────
 // Retorna a resposta de texto a enviar para o WhatsApp
 export async function processarMensagem(telefone, texto, pushName) {
   // Se já está pausada para humano, não responde
@@ -337,9 +341,7 @@ export async function processarMensagem(telefone, texto, pushName) {
 
   // Busca config da loja no Firebase (entrega_ativa, etc)
   let configLoja = {};
-  try {
-    configLoja = (await fb.get('config')) || {};
-  } catch (e) {
+  try { configLoja = (await fb.get('config')) || {}; } catch (e) {
     console.warn('Não conseguiu ler config da loja:', e.message);
   }
 
@@ -376,7 +378,6 @@ export async function processarMensagem(telefone, texto, pushName) {
   let iteracoes = 0;
   while (iteracoes < 8) {
     iteracoes++;
-
     const response = result.response;
     const calls = (typeof response.functionCalls === 'function') ? response.functionCalls() : null;
 
@@ -395,13 +396,9 @@ export async function processarMensagem(telefone, texto, pushName) {
     for (const call of calls) {
       try {
         const r = await executarTool(telefone, call.name, call.args || {});
-        functionResponses.push({
-          functionResponse: { name: call.name, response: r },
-        });
+        functionResponses.push({ functionResponse: { name: call.name, response: r } });
       } catch (e) {
-        functionResponses.push({
-          functionResponse: { name: call.name, response: { erro: e.message } },
-        });
+        functionResponses.push({ functionResponse: { name: call.name, response: { erro: e.message } } });
       }
     }
 
