@@ -294,6 +294,10 @@ async function executarTool(telefone, nome, args) {
         });
       } catch (e) { console.warn('upsertCliente falhou:', e.message); }
 
+      // Gera link do Google Maps se tiver localização
+      const loc = dados.localizacao || null;
+      const mapsLink = loc?.lat && loc?.lng ? `https://www.google.com/maps?q=${loc.lat},${loc.lng}` : '';
+
       const pedido = {
         itens: carrinho.map(i => ({
           id: i.id, nome: i.nome, preco: i.preco, qtd: i.qtd, obs: i.obs || '', subtotal: i.subtotal,
@@ -303,6 +307,8 @@ async function executarTool(telefone, nome, args) {
         cliente: {
           nome: dados.nome, telefone: dados.telefone,
           endereco: dados.endereco || '', bairro: dados.bairro || '', referencia: dados.referencia || '',
+          localizacao: loc || null,
+          mapsLink: mapsLink,
           logado: false, nivel: 'novo',
         },
       };
@@ -342,6 +348,27 @@ export async function processarMensagem(telefone, texto, pushName) {
   const dados = getDados(telefone);
   if (pushName && !dados.nome_whatsapp) dados.nome_whatsapp = pushName;
 
+  // Carrega dados do cliente do Firebase (se já comprou antes, não pede de novo)
+  if (!dados._carregouFirebase) {
+    try {
+      const clienteSalvo = await fb.get(`clientes_bot/${String(telefone).replace(/\\D+/g, '')}`);
+      if (clienteSalvo) {
+        if (clienteSalvo.nome && !dados.nome) dados.nome = clienteSalvo.nome;
+        if (clienteSalvo.endereco && !dados.endereco) dados.endereco = clienteSalvo.endereco;
+        if (clienteSalvo.bairro && !dados.bairro) dados.bairro = clienteSalvo.bairro;
+        if (clienteSalvo.referencia && !dados.referencia) dados.referencia = clienteSalvo.referencia;
+        if (clienteSalvo.localizacao && !dados.localizacao) dados.localizacao = clienteSalvo.localizacao;
+        dados._carregouFirebase = true;
+        if (clienteSalvo.nome) {
+          console.log(`👤 Cliente reconhecido: ${clienteSalvo.nome} (${telefone})`);
+        }
+      }
+    } catch (e) {
+      console.warn('Erro ao buscar cliente salvo:', e.message);
+    }
+    dados._carregouFirebase = true;
+  }
+
   // Busca config da loja no Firebase (entrega_ativa, etc)
   let configLoja = {};
   try { configLoja = (await fb.get('config')) || {}; } catch (e) {
@@ -351,6 +378,16 @@ export async function processarMensagem(telefone, texto, pushName) {
   // Verifica se a loja está aberta (controlado pelo PDV no Firebase)
   // config.loja_aberta = true/false — se não existir, assume fechado por segurança
   configLoja.aberto = configLoja.loja_aberta === true;
+
+  // Passa dados do cliente pro prompt (pra IA saber que já tem info salva)
+  const loc = dados.localizacao || null;
+  configLoja.cliente_salvo = {
+    nome: dados.nome || '',
+    endereco: dados.endereco || '',
+    bairro: dados.bairro || '',
+    referencia: dados.referencia || '',
+    temLocalizacao: !!(loc?.lat && loc?.lng),
+  };
 
   // Monta histórico a partir do Firebase (últimas 20 msgs, formato Gemini)
   const historicoRaw = (conversaAtual?.mensagens || []).slice(-20);

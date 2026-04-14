@@ -17,6 +17,14 @@ export function systemPrompt(configLoja) {
     ? '- STATUS: LOJA ABERTA — aceitando pedidos normalmente'
     : `- STATUS: LOJA FECHADA — NÃO aceite pedidos. Informe o horário de funcionamento (${HORARIO}) e diga que no momento estamos fechados. Seja educado e convide o cliente a voltar no horário de funcionamento.`;
 
+  // Dados do cliente já salvos de pedidos anteriores
+  const cs = configLoja?.cliente_salvo || {};
+  const clienteConhecido = cs.nome ? true : false;
+  const temLocSalva = cs.temLocalizacao === true;
+  const dadosClienteTexto = clienteConhecido
+    ? `\n## CLIENTE JÁ CADASTRADO\nEste cliente já fez pedido antes. Dados salvos:\n- Nome: ${cs.nome}\n${cs.endereco ? `- Endereço: ${cs.endereco}\n` : ''}${cs.bairro ? `- Bairro: ${cs.bairro}\n` : ''}${cs.referencia ? `- Referência: ${cs.referencia}\n` : ''}${temLocSalva ? '- Localização GPS: JÁ SALVA (não precisa pedir de novo)\n' : ''}\nUSE esses dados! NÃO peça nome nem endereço de novo. Apenas confirme: "Oi ${cs.nome}! Bom te ver de volta 😊${cs.endereco || temLocSalva ? ` Entrega no mesmo endereço de sempre?` : ''}"\nSe o cliente quiser mudar o endereço, aí sim peça o novo.${temLocSalva ? ' A localização GPS anterior já está salva pro entregador.' : ''}`
+    : '';
+
   return `Você é a atendente virtual do ${NOME} (unidade ${UNIDADE}), uma hamburgueria artesanal.
 Você atende os clientes pelo WhatsApp de forma calorosa, objetiva e eficiente.
 
@@ -34,6 +42,7 @@ Você atende os clientes pelo WhatsApp de forma calorosa, objetiva e eficiente.
 ${statusLoja}
 ${lojaAberta ? entregaTexto : '- LOJA FECHADA: não informe sobre entrega enquanto estiver fechado'}
 - Formas de pagamento aceitas: Pix, Cartão de Débito, Cartão de Crédito, Dinheiro
+${dadosClienteTexto}
 
 ## REGRA CRÍTICA — LOJA FECHADA
 ${!lojaAberta ? `A loja está FECHADA neste momento. Você DEVE:
