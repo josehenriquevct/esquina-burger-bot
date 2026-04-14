@@ -15,9 +15,6 @@ const MODELO = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 // URL da imagem do cardápio (hospedada no GitHub)
 const CARDAPIO_IMG_URL = process.env.CARDAPIO_IMG_URL || 'https://raw.githubusercontent.com/josehenriquevct/esquina-burger-bot/main/cardapio.png';
 
-// Status de aberto/fechado é lido do Firebase (config.loja_aberta)
-// O PDV controla isso — José pode abrir/fechar direto pela interface
-
 /**
  * Transcreve áudio usando Gemini (multimodal)
  * @param {string} base64Audio - áudio em base64
@@ -58,10 +55,12 @@ function getCarrinho(telefone) {
   if (!carrinhos.has(telefone)) carrinhos.set(telefone, []);
   return carrinhos.get(telefone);
 }
+
 function getDados(telefone) {
   if (!dadosClientes.has(telefone)) dadosClientes.set(telefone, { telefone });
   return dadosClientes.get(telefone);
 }
+
 function limparEstado(telefone) {
   carrinhos.delete(telefone);
   dadosClientes.delete(telefone);
@@ -212,11 +211,10 @@ async function executarTool(telefone, nome, args) {
     case 'adicionar_item': {
       const item = buscarItem(args.nome_ou_id);
       if (!item) return { sucesso: false, erro: `Item "${args.nome_ou_id}" não encontrado no cardápio. Peça para o cliente escolher outro.` };
-
       const qtd = Math.max(1, parseInt(args.quantidade || 1));
       carrinho.push({
-        id: item.id, nome: item.nome, preco: item.preco,
-        qtd, obs: args.observacao || '',
+        id: item.id, nome: item.nome, preco: item.preco, qtd,
+        obs: args.observacao || '',
         subtotal: item.preco * qtd,
       });
       return {
@@ -241,7 +239,9 @@ async function executarTool(telefone, nome, args) {
       const taxa = dados.tipo === 'delivery' ? parseFloat(process.env.TAXA_ENTREGA || '5') : 0;
       return {
         itens: carrinho.map(i => ({ qtd: i.qtd, nome: i.nome, preco: i.preco, obs: i.obs, subtotal: i.subtotal })),
-        subtotal, taxa_entrega: taxa, total: subtotal + taxa,
+        subtotal,
+        taxa_entrega: taxa,
+        total: subtotal + taxa,
         tipo: dados.tipo || '',
         cliente: { nome: dados.nome || '', endereco: dados.endereco || '', bairro: dados.bairro || '', pagamento: dados.pagamento || '' },
       };
@@ -289,36 +289,53 @@ async function executarTool(telefone, nome, args) {
 
       try {
         await upsertCliente({
-          nome: dados.nome, telefone: dados.telefone,
-          endereco: dados.endereco || '', bairro: dados.bairro || '', referencia: dados.referencia || '',
+          nome: dados.nome,
+          telefone: dados.telefone,
+          endereco: dados.endereco || '',
+          bairro: dados.bairro || '',
+          referencia: dados.referencia || '',
         });
-      } catch (e) { console.warn('upsertCliente falhou:', e.message); }
+      } catch (e) {
+        console.warn('upsertCliente falhou:', e.message);
+      }
 
       // Gera link do Google Maps se tiver localização
       const loc = dados.localizacao || null;
-      const mapsLink = loc?.lat && loc?.lng ? `https://www.google.com/maps?q=${loc.lat},${loc.lng}` : '';
+      const mapsLink = loc?.lat && loc?.lng
+        ? `https://www.google.com/maps?q=${loc.lat},${loc.lng}`
+        : '';
 
       const pedido = {
         itens: carrinho.map(i => ({
-          id: i.id, nome: i.nome, preco: i.preco, qtd: i.qtd, obs: i.obs || '', subtotal: i.subtotal,
+          id: i.id, nome: i.nome, preco: i.preco, qtd: i.qtd,
+          obs: i.obs || '', subtotal: i.subtotal,
         })),
-        subtotal, taxa, desconto: 0, total, tipo: dados.tipo,
-        pagamento: dados.pagamento, troco: dados.troco || '',
+        subtotal, taxa, desconto: 0, total,
+        tipo: dados.tipo,
+        pagamento: dados.pagamento,
+        troco: dados.troco || '',
         cliente: {
-          nome: dados.nome, telefone: dados.telefone,
-          endereco: dados.endereco || '', bairro: dados.bairro || '', referencia: dados.referencia || '',
+          nome: dados.nome,
+          telefone: dados.telefone,
+          endereco: dados.endereco || '',
+          bairro: dados.bairro || '',
+          referencia: dados.referencia || '',
           localizacao: loc || null,
           mapsLink: mapsLink,
-          logado: false, nivel: 'novo',
+          logado: false,
+          nivel: 'novo',
         },
       };
 
       try {
         const criado = await criarPedidoAberto(pedido);
         limparEstado(telefone);
+
         // Gera link de rastreio se for delivery
         const BOT_URL = process.env.RAILWAY_PUBLIC_DOMAIN || process.env.BOT_URL || 'esquina-burger-bot-production-f75a.up.railway.app';
-        const rastreioLink = dados.tipo === 'delivery' ? `https://${BOT_URL}/rastreio/${criado.key}` : '';
+        const rastreioLink = dados.tipo === 'delivery'
+          ? `https://${BOT_URL}/rastreio/${criado.key}`
+          : '';
 
         return {
           sucesso: true,
@@ -382,13 +399,14 @@ export async function processarMensagem(telefone, texto, pushName) {
 
   // Busca config da loja no Firebase (entrega_ativa, etc)
   let configLoja = {};
-  try { configLoja = (await fb.get('config')) || {}; } catch (e) {
+  try {
+    configLoja = (await fb.get('config')) || {};
+  } catch (e) {
     console.warn('Não conseguiu ler config da loja:', e.message);
   }
 
-  // Verifica se a loja está aberta (controlado pelo PDV no Firebase)
-  // config.loja_aberta = true/false — se não existir, assume fechado por segurança
-  configLoja.aberto = configLoja.loja_aberta === true;
+  // Bot atende 24h — sem restrição de horário
+  configLoja.aberto = true;
 
   // Passa dados do cliente pro prompt (pra IA saber que já tem info salva)
   const loc = dados.localizacao || null;
@@ -433,6 +451,7 @@ export async function processarMensagem(telefone, texto, pushName) {
   let iteracoes = 0;
   while (iteracoes < 8) {
     iteracoes++;
+
     const response = result.response;
     const calls = (typeof response.functionCalls === 'function') ? response.functionCalls() : null;
 

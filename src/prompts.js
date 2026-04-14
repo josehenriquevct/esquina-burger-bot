@@ -7,20 +7,17 @@ const HORARIO = process.env.HORARIO_FUNCIONAMENTO || 'Terça a Domingo, 18h às 
 const ENDERECO = process.env.ENDERECO_LOJA || 'Rua Principal, 123 - Vicentinópolis';
 
 export function systemPrompt(configLoja) {
-  const lojaAberta = configLoja?.aberto === true;
   const entregaAtiva = configLoja?.entrega_ativa !== false;
+
   const entregaTexto = entregaAtiva
     ? `- Taxa de entrega: R$ ${TAXA.toFixed(2).replace('.', ',')} (fixa para delivery)`
     : `- ENTREGA DESATIVADA: Hoje NÃO estamos fazendo entregas. Só aceitamos RETIRADA NO LOCAL ou CONSUMO NO SALÃO.`;
-
-  const statusLoja = lojaAberta
-    ? '- STATUS: LOJA ABERTA — aceitando pedidos normalmente'
-    : `- STATUS: LOJA FECHADA — NÃO aceite pedidos. Informe o horário de funcionamento (${HORARIO}) e diga que no momento estamos fechados. Seja educado e convide o cliente a voltar no horário de funcionamento.`;
 
   // Dados do cliente já salvos de pedidos anteriores
   const cs = configLoja?.cliente_salvo || {};
   const clienteConhecido = cs.nome ? true : false;
   const temLocSalva = cs.temLocalizacao === true;
+
   const dadosClienteTexto = clienteConhecido
     ? `\n## CLIENTE JÁ CADASTRADO\nEste cliente já fez pedido antes. Dados salvos:\n- Nome: ${cs.nome}\n${cs.endereco ? `- Endereço: ${cs.endereco}\n` : ''}${cs.bairro ? `- Bairro: ${cs.bairro}\n` : ''}${cs.referencia ? `- Referência: ${cs.referencia}\n` : ''}${temLocSalva ? '- Localização GPS: JÁ SALVA (não precisa pedir de novo)\n' : ''}\nUSE esses dados! NÃO peça nome nem endereço de novo. Apenas confirme: "Oi ${cs.nome}! Bom te ver de volta 😊${cs.endereco || temLocSalva ? ` Entrega no mesmo endereço de sempre?` : ''}"\nSe o cliente quiser mudar o endereço, aí sim peça o novo.${temLocSalva ? ' A localização GPS anterior já está salva pro entregador.' : ''}`
     : '';
@@ -39,20 +36,9 @@ Você atende os clientes pelo WhatsApp de forma calorosa, objetiva e eficiente.
 - Nome: ${NOME} — unidade ${UNIDADE}
 - Endereço da loja: ${ENDERECO}
 - Horário de funcionamento: ${HORARIO}
-${statusLoja}
-${lojaAberta ? entregaTexto : '- LOJA FECHADA: não informe sobre entrega enquanto estiver fechado'}
+${entregaTexto}
 - Formas de pagamento aceitas: Pix, Cartão de Débito, Cartão de Crédito, Dinheiro
 ${dadosClienteTexto}
-
-## REGRA CRÍTICA — LOJA FECHADA
-${!lojaAberta ? `A loja está FECHADA neste momento. Você DEVE:
-1. Cumprimentar o cliente educadamente
-2. Informar que estamos fechados no momento
-3. Dizer o horário de funcionamento: ${HORARIO}
-4. NÃO usar nenhuma tool de pedido (adicionar_item, finalizar_pedido, etc)
-5. NÃO mostrar o cardápio nem aceitar pedidos
-6. Convidar o cliente a voltar no horário de funcionamento
-7. Se o cliente insistir, repita educadamente que está fechado` : 'A loja está ABERTA. Atenda normalmente e aceite pedidos.'}
 
 ## Cardápio completo
 ${cardapioResumo()}
@@ -68,9 +54,7 @@ ${cardapioResumo()}
 2. Confirme o que entendeu ("Adicionei 1 Duplo Blade e 1 Coca 600ml, confere?")
 3. Pergunte se quer mais alguma coisa
 4. Quando o cliente disser que é só, pergunte o tipo de pedido:
-${entregaAtiva
-    ? '  - Se entrega ativa: salão, delivery ou retirada'
-    : '  - ENTREGA DESATIVADA HOJE: ofereça APENAS salão ou retirada. Se o cliente pedir delivery, informe educadamente: "Opa, hoje infelizmente não estamos fazendo entregas 😔 Mas se quiser retirar no local é super rápido, em poucos minutos já tá pronto pra você buscar!"'}
+${entregaAtiva ? '   - salão, delivery ou retirada' : '   - ENTREGA DESATIVADA HOJE: ofereça APENAS salão ou retirada. Se o cliente pedir delivery, informe educadamente: "Opa, hoje infelizmente não estamos fazendo entregas 😔 Mas se quiser retirar no local é super rápido!"'}
 
 **Dados do cliente (OBRIGATÓRIOS antes de finalizar):**
 - Nome completo
