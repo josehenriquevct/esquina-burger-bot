@@ -1,5 +1,6 @@
 // Cliente simples do Firebase Realtime Database via REST
 // Usa a mesma URL que o PDV — sem precisar de service account
+
 import fetch from 'node-fetch';
 
 const DB_URL = process.env.FIREBASE_DB_URL;
@@ -21,11 +22,11 @@ async function req(method, path, body) {
 }
 
 export const fb = {
-  get:    (path)        => req('GET',    path),
-  put:    (path, body)  => req('PUT',    path, body),
-  post:   (path, body)  => req('POST',   path, body),
-  patch:  (path, body)  => req('PATCH',  path, body),
-  del:    (path)        => req('DELETE', path),
+  get: (path) => req('GET', path),
+  put: (path, body) => req('PUT', path, body),
+  post: (path, body) => req('POST', path, body),
+  patch: (path, body) => req('PATCH', path, body),
+  del: (path) => req('DELETE', path),
 };
 
 // ── Helpers de conversas ──────────────────────────────────────────
@@ -58,29 +59,38 @@ export async function adicionarMensagem(telefone, msg) {
   };
   if (!Array.isArray(conversa.mensagens)) conversa.mensagens = [];
   conversa.mensagens.push({ ...msg, timestamp: Date.now() });
+
   // Mantém últimas 40 mensagens para não inchar
   if (conversa.mensagens.length > 40) {
     conversa.mensagens = conversa.mensagens.slice(-40);
   }
+
   conversa.ultimaMsg = msg.texto || '';
   conversa.atualizadoEm = Date.now();
   await fb.put(`bot_conversas/${key}`, conversa);
   return conversa;
 }
 
+// Gera código de confirmação de 4 dígitos
+function gerarCodigoConfirmacao() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
 // Escreve um pedido em pedidos_abertos com autoAceito=true
-// O PDV (quando for master tab) vai pegar, auto-aceitar e imprimir
+// Gera código de confirmação pra entregador validar na entrega
 export async function criarPedidoAberto(pedido) {
   const key = `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const codigoConfirmacao = gerarCodigoConfirmacao();
   const payload = {
     ...pedido,
     origem: 'whatsapp-bot',
     autoAceito: true,
     status: 'aguardando',
+    codigoConfirmacao,
     criadoEm: Date.now(),
   };
   await fb.put(`pedidos_abertos/${key}`, payload);
-  return { key, ...payload };
+  return { key, codigoConfirmacao, ...payload };
 }
 
 // Upsert de cliente em /clientes_bot (o PDV pode puxar depois)

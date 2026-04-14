@@ -316,7 +316,18 @@ async function executarTool(telefone, nome, args) {
       try {
         const criado = await criarPedidoAberto(pedido);
         limparEstado(telefone);
-        return { sucesso: true, pedido_id: criado.key, total };
+        // Gera link de rastreio se for delivery
+        const BOT_URL = process.env.RAILWAY_PUBLIC_DOMAIN || process.env.BOT_URL || 'esquina-burger-bot-production-f75a.up.railway.app';
+        const rastreioLink = dados.tipo === 'delivery' ? `https://${BOT_URL}/rastreio/${criado.key}` : '';
+
+        return {
+          sucesso: true,
+          pedido_id: criado.key,
+          total,
+          codigoConfirmacao: criado.codigoConfirmacao,
+          rastreioLink,
+          instrucao_codigo: `IMPORTANTE: Informe ao cliente o código de confirmação da entrega: ${criado.codigoConfirmacao}. Diga que o entregador vai pedir esse código na hora da entrega pra confirmar que recebeu.${rastreioLink ? ` Também envie este link para o cliente acompanhar a entrega em tempo real: ${rastreioLink}` : ''}`,
+        };
       } catch (e) {
         return { sucesso: false, erro: 'Falha ao salvar pedido: ' + e.message };
       }
