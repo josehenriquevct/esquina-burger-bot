@@ -145,7 +145,6 @@ app.post('/webhook', async (req, res) => {
           msg.texto = transcricao;
           console.log(`✅ Áudio transcrito: "${transcricao.slice(0, 80)}"`);
         } else {
-          // Não conseguiu transcrever, avisa o cliente
           msg.texto = '[O cliente enviou um áudio mas não foi possível entender. Peça educadamente para ele digitar a mensagem.]';
           console.log(`⚠ Áudio não compreendido de ${msg.telefone}`);
         }
@@ -324,4 +323,4 @@ app.listen(PORT, () => {
   console.log(`   Retomar:    POST /retomar { telefone }`);
   console.log(`   Send:       POST /send { telefone, texto }`);
   console.log(`   Status:     GET  /status`);
-});
+});  

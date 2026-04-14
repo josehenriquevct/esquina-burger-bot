@@ -43,7 +43,9 @@ export const CARDAPIO = [
   { id: 32, nome: 'Alface',                   desc: 'Folhas de alface', preco: 3.00,  cat: 'extras' },
   { id: 33, nome: 'Tomate',                   desc: 'Rodelas de tomate', preco: 3.00,  cat: 'extras' },
   { id: 34, nome: 'Salada Completa',          desc: 'Alface, tomate, cebola roxa e picles', preco: 6.00,  cat: 'extras' },
-  { id: 35, nome: 'Molho Extra',              desc: 'Porção de molho da casa', preco: 4.00,  cat: 'extras' },
+  { id: 35, nome: 'Maionese Caseira',         desc: 'Maionese caseira artesanal', preco: 4.00,  cat: 'extras' },
+  { id: 36, nome: 'Molho da Casa',            desc: 'Molho especial da casa', preco: 4.00,  cat: 'extras' },
+  { id: 37, nome: 'Molho Barbecue',           desc: 'Molho barbecue defumado', preco: 4.00,  cat: 'extras' },
 ];
 
 export function buscarItem(query) {
