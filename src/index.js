@@ -1,6 +1,7 @@
 // Servidor principal do bot do Esquina Burger
 // Recebe webhooks da Evolution API, processa com Gemini, responde via WhatsApp
 // Também expõe endpoints REST pra aba Atendimento do PDV
+
 import 'dotenv/config';
 import express from 'express';
 import { processarMensagem, transcreverAudio } from './ai.js';
@@ -9,6 +10,18 @@ import { adicionarMensagem, salvarConversa, getConversa, upsertCliente, fb } fro
 
 // Ignora mensagens anteriores ao boot (evita flood pos-redeploy)
 const BOT_STARTED_AT = Math.floor(Date.now() / 1000);
+
+// Deduplicação: ignora webhooks repetidos da mesma mensagem
+const mensagensProcessadas = new Set();
+const DEDUP_TTL_MS = 5 * 60 * 1000; // 5 minutos
+
+function jaProcessou(messageId) {
+  if (!messageId) return false;
+  if (mensagensProcessadas.has(messageId)) return true;
+  mensagensProcessadas.add(messageId);
+  setTimeout(() => mensagensProcessadas.delete(messageId), DEDUP_TTL_MS);
+  return false;
+}
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -26,10 +39,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN || process.env.WEBHOOK_TOKEN || '';
 function checkBotToken(req, res) {
   if (!BOT_TOKEN) return true;
   const t = req.headers['x-bot-token'] || req.query.token;
-  if (t !== BOT_TOKEN) {
-    res.status(401).json({ error: 'Token inválido' });
-    return false;
-  }
+  if (t !== BOT_TOKEN) { res.status(401).json({ error: 'Token inválido' }); return false; }
   return true;
 }
 
@@ -40,7 +50,6 @@ const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN;
 
 // Fila simples por telefone para evitar processamento paralelo do mesmo cliente
 const filaPorTelefone = new Map();
-
 async function processarComFila(telefone, texto, pushName) {
   const anterior = filaPorTelefone.get(telefone) || Promise.resolve();
   const atual = anterior.then(async () => {
@@ -53,7 +62,6 @@ async function processarComFila(telefone, texto, pushName) {
 
       // Processa com Claude
       const resposta = await processarMensagem(telefone, texto, pushName);
-
       if (!resposta) {
         console.log(`⏸ ${telefone} — conversa pausada para humano, não respondendo`);
         return;
@@ -74,13 +82,16 @@ async function processarComFila(telefone, texto, pushName) {
       } catch {}
     }
   });
+
   filaPorTelefone.set(telefone, atual);
+
   // Limpa a fila depois que termina (evita memory leak)
   atual.finally(() => {
     if (filaPorTelefone.get(telefone) === atual) {
       filaPorTelefone.delete(telefone);
     }
   });
+
   return atual;
 }
 
@@ -107,6 +118,7 @@ app.post('/webhook', async (req, res) => {
   res.json({ ok: true });
 
   const evento = req.body?.event;
+
   // Só processa mensagens recebidas
   if (evento && evento !== 'messages.upsert' && evento !== 'MESSAGES_UPSERT') {
     return;
@@ -115,12 +127,19 @@ app.post('/webhook', async (req, res) => {
   const msg = parseWebhook(req.body);
   if (!msg) return;
 
-    // Ignora mensagens anteriores ao boot do bot (evita flood pos-redeploy)
-    const msgTs = Number(req.body?.data?.messageTimestamp || 0);
-    if (msgTs && msgTs < BOT_STARTED_AT) {
-          console.log(`⏭ Ignorando msg antiga de ${msg.telefone} (ts=${msgTs} < boot=${BOT_STARTED_AT})`);
-          return;
-    }
+  // Ignora mensagens anteriores ao boot do bot (evita flood pos-redeploy)
+  const msgTs = Number(req.body?.data?.messageTimestamp || 0);
+  if (msgTs && msgTs < BOT_STARTED_AT) {
+    console.log(`⏭ Ignorando msg antiga de ${msg.telefone} (ts=${msgTs} < boot=${BOT_STARTED_AT})`);
+    return;
+  }
+
+  // Deduplicação por ID de mensagem (ignora webhook repetido)
+  const messageId = req.body?.data?.key?.id;
+  if (jaProcessou(messageId)) {
+    console.log(`🔁 Msg duplicada ignorada de ${msg.telefone} (id=${messageId})`);
+    return;
+  }
 
   console.log(`📥 ${msg.telefone} (${msg.pushName || '?'}): ${msg.texto.slice(0, 80)}`);
 
@@ -207,9 +226,7 @@ app.get('/conversas', async (req, res) => {
     }));
     lista.sort((a, b) => (b.atualizadoEm || 0) - (a.atualizadoEm || 0));
     res.json({ conversas: lista });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Detalhe de uma conversa
@@ -218,9 +235,7 @@ app.get('/conversa/:telefone', async (req, res) => {
   try {
     const c = await getConversa(req.params.telefone);
     res.json(c || { telefone: phoneKey(req.params.telefone), mensagens: [], status: 'ativo' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Pausa a IA pra um contato (humano assume)
@@ -231,9 +246,7 @@ app.post('/pausar', async (req, res) => {
     if (!tel) return res.status(400).json({ error: 'telefone obrigatório' });
     await salvarConversa(tel, { status: 'pausado_humano' });
     res.json({ ok: true, telefone: tel, status: 'pausado_humano' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Retoma a IA pra um contato
@@ -244,9 +257,7 @@ app.post('/retomar', async (req, res) => {
     if (!tel) return res.status(400).json({ error: 'telefone obrigatório' });
     await salvarConversa(tel, { status: 'ativo' });
     res.json({ ok: true, telefone: tel, status: 'ativo' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Envia uma mensagem manual pelo WhatsApp (humano respondendo)
@@ -257,13 +268,10 @@ app.post('/send', async (req, res) => {
     const tel = phoneKey(req.body?.telefone);
     const texto = String(req.body?.texto || '').trim();
     if (!tel || !texto) return res.status(400).json({ error: 'telefone e texto obrigatórios' });
-
     await enviarMensagem(tel, texto);
     await adicionarMensagem(tel, { role: 'assistant', texto, manual: true });
     res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Backup completo do Firebase (protegido) — usado pra snapshot local antes de mexer
@@ -273,19 +281,17 @@ app.get('/backup', async (req, res) => {
     const snapshot = {
       geradoEm: new Date().toISOString(),
       bot_conversas: (await fb.get('bot_conversas')) || {},
-      clientes_bot:  (await fb.get('clientes_bot'))  || {},
+      clientes_bot: (await fb.get('clientes_bot')) || {},
       pedidos_abertos: (await fb.get('pedidos_abertos')) || {},
-      clientes:  (await fb.get('clientes'))  || {},
-      produtos:  (await fb.get('produtos'))  || {},
-      pedidos:   (await fb.get('pedidos'))   || {},
-      config:    (await fb.get('config'))    || {},
+      clientes: (await fb.get('clientes')) || {},
+      produtos: (await fb.get('produtos')) || {},
+      pedidos: (await fb.get('pedidos')) || {},
+      config: (await fb.get('config')) || {},
     };
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="firebase-backup.json"');
     res.send(JSON.stringify(snapshot, null, 2));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Liga/Desliga entrega ──
@@ -300,9 +306,7 @@ app.post('/entrega', async (req, res) => {
     await fb.put('config', config);
     console.log(`🚚 Entrega ${ativa ? 'ATIVADA' : 'DESATIVADA'}`);
     res.json({ ok: true, entrega_ativa: ativa });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Status geral do bot (pra aba Atendimento mostrar)
@@ -312,6 +316,7 @@ app.get('/status', async (req, res) => {
     const config = (await fb.get('config')) || {};
     entregaAtiva = config.entrega_ativa !== false;
   } catch {}
+
   res.json({
     online: true,
     entrega_ativa: entregaAtiva,
@@ -326,11 +331,11 @@ app.get('/status', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🍔 Esquina Burger Bot rodando na porta ${PORT}`);
-  console.log(`   Webhook:    POST /webhook`);
-  console.log(`   Teste:      POST /test { telefone, texto }`);
-  console.log(`   Conversas:  GET  /conversas`);
-  console.log(`   Pausar:     POST /pausar { telefone }`);
-  console.log(`   Retomar:    POST /retomar { telefone }`);
-  console.log(`   Send:       POST /send { telefone, texto }`);
-  console.log(`   Status:     GET  /status`);
+  console.log(`  Webhook:   POST /webhook`);
+  console.log(`  Teste:     POST /test { telefone, texto }`);
+  console.log(`  Conversas: GET  /conversas`);
+  console.log(`  Pausar:    POST /pausar { telefone }`);
+  console.log(`  Retomar:   POST /retomar { telefone }`);
+  console.log(`  Send:      POST /send { telefone, texto }`);
+  console.log(`  Status:    GET  /status`);
 });  
