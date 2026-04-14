@@ -64,6 +64,26 @@ export async function mostrarDigitando(telefone, duracaoMs = 1500) {
 }
 
 /**
+ * Baixa a mídia (áudio, imagem, etc) de uma mensagem em base64 via Evolution API
+ * @param {object} messageKey - key da mensagem (id, remoteJid, fromMe)
+ * @returns {Promise<{base64: string, mimetype: string}|null>}
+ */
+export async function baixarMidiaBase64(messageKey) {
+  try {
+    const result = await evoReq(`/chat/getBase64FromMediaMessage/${INSTANCE}`, 'POST', {
+      message: { key: messageKey },
+    });
+    if (result?.base64) {
+      return { base64: result.base64, mimetype: result.mimetype || 'audio/ogg' };
+    }
+    return null;
+  } catch (e) {
+    console.error('Erro ao baixar mídia:', e.message);
+    return null;
+  }
+}
+
+/**
  * Extrai o texto e o telefone de um webhook de mensagem da Evolution
  * Suporta formato v2 da Evolution API
  */
@@ -85,16 +105,35 @@ export function parseWebhook(body) {
 
     // Extrai texto de diferentes tipos de mensagem
     let texto = '';
+    let localizacao = null;
+
     if (msg.conversation) texto = msg.conversation;
     else if (msg.extendedTextMessage?.text) texto = msg.extendedTextMessage.text;
+    else if (msg.locationMessage) {
+      // Cliente mandou localização (pin do GPS)
+      const lat = msg.locationMessage.degreesLatitude;
+      const lng = msg.locationMessage.degreesLongitude;
+      const nome = msg.locationMessage.name || '';
+      const endereco = msg.locationMessage.address || '';
+      localizacao = { lat, lng, nome, endereco };
+      texto = `[LOCALIZAÇÃO RECEBIDA] Latitude: ${lat}, Longitude: ${lng}` +
+              (nome ? `, Nome: ${nome}` : '') +
+              (endereco ? `, Endereço: ${endereco}` : '');
+    }
     else if (msg.imageMessage?.caption) texto = '[imagem] ' + (msg.imageMessage.caption || '');
-    else if (msg.audioMessage) texto = '[áudio — transcrição não suportada ainda]';
+    else if (msg.imageMessage) texto = '[imagem enviada]';
+    else if (msg.audioMessage) {
+      // Cliente mandou áudio — marca pra transcrever depois
+      texto = '[ÁUDIO]';
+      const pushName = data.pushName || data.notifyName || '';
+      return { telefone, texto, pushName, localizacao: null, audio: true, messageKey: data.key };
+    }
     else if (msg.stickerMessage) texto = '[figurinha]';
     else return null;
 
     const pushName = data.pushName || data.notifyName || '';
 
-    return { telefone, texto: texto.trim(), pushName };
+    return { telefone, texto: texto.trim(), pushName, localizacao };
   } catch (e) {
     console.error('Erro parseWebhook:', e);
     return null;

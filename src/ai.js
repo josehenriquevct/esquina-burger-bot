@@ -3,12 +3,45 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { systemPrompt } from './prompts.js';
 import { CARDAPIO, buscarItem } from './cardapio.js';
-import { criarPedidoAberto, upsertCliente, salvarConversa, getConversa } from './firebase.js';
+import { criarPedidoAberto, upsertCliente, salvarConversa, getConversa, fb } from './firebase.js';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// gemini-2.0-flash: rápido, barato, generoso no tier grátis, suporta tool use
+// gemini-2.0-flash: rápido, barato, generoso no tier grátis, suporta tool use + áudio
 const MODELO = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+
+/**
+ * Transcreve áudio usando Gemini (multimodal)
+ * @param {string} base64Audio - áudio em base64
+ * @param {string} mimetype - tipo do áudio (ex: audio/ogg, audio/mpeg)
+ * @returns {Promise<string>} texto transcrito
+ */
+export async function transcreverAudio(base64Audio, mimetype = 'audio/ogg') {
+  try {
+    const model = genAI.getGenerativeModel({ model: MODELO });
+
+    const result = await model.generateContent([
+      {
+        inlineData: {
+          mimeType: mimetype,
+          data: base64Audio,
+        },
+      },
+      {
+        text: 'Transcreva exatamente o que a pessoa está falando neste áudio. Retorne APENAS o texto falado, sem explicações, sem aspas, sem prefixos como "Transcrição:". Se não entender, retorne "[áudio não compreendido]".',
+      },
+    ]);
+
+    const transcricao = result.response.text()?.trim();
+    if (!transcricao) return '[áudio não compreendido]';
+
+    console.log(`🎤 Transcrição: "${transcricao.slice(0, 80)}${transcricao.length > 80 ? '...' : ''}"`);
+    return transcricao;
+  } catch (e) {
+    console.error('Erro ao transcrever áudio:', e.message);
+    return '[erro ao transcrever áudio]';
+  }
+}
 
 // ── Estado por cliente (em memória) ─────────────────────────────
 const carrinhos = new Map();
@@ -200,9 +233,19 @@ async function executarTool(telefone, nome, args) {
       return { sucesso: true, cliente: { ...dados } };
     }
 
-    case 'definir_tipo_pedido':
+    case 'definir_tipo_pedido': {
+      // Bloqueia delivery se entrega estiver desativada no Firebase
+      if (args.tipo === 'delivery') {
+        try {
+          const config = (await fb.get('config')) || {};
+          if (config.entrega_ativa === false) {
+            return { sucesso: false, erro: 'Entrega DESATIVADA hoje. Ofereça apenas retirada ou salão ao cliente.' };
+          }
+        } catch (e) { console.warn('Erro ao checar config entrega:', e.message); }
+      }
       dados.tipo = args.tipo;
       return { sucesso: true, tipo: args.tipo };
+    }
 
     case 'definir_pagamento':
       dados.pagamento = args.pagamento;
@@ -292,6 +335,14 @@ export async function processarMensagem(telefone, texto, pushName) {
   const dados = getDados(telefone);
   if (pushName && !dados.nome_whatsapp) dados.nome_whatsapp = pushName;
 
+  // Busca config da loja no Firebase (entrega_ativa, etc)
+  let configLoja = {};
+  try {
+    configLoja = (await fb.get('config')) || {};
+  } catch (e) {
+    console.warn('Não conseguiu ler config da loja:', e.message);
+  }
+
   // Monta histórico a partir do Firebase (últimas 20 msgs, formato Gemini)
   const historicoRaw = (conversaAtual?.mensagens || []).slice(-20);
   const history = historicoRaw
@@ -304,7 +355,7 @@ export async function processarMensagem(telefone, texto, pushName) {
   const model = genAI.getGenerativeModel({
     model: MODELO,
     tools: TOOLS,
-    systemInstruction: systemPrompt(),
+    systemInstruction: systemPrompt(configLoja),
     generationConfig: {
       temperature: 0.7,
       maxOutputTokens: 1024,

@@ -3,9 +3,9 @@
 // Também expõe endpoints REST pra aba Atendimento do PDV
 import 'dotenv/config';
 import express from 'express';
-import { processarMensagem } from './ai.js';
-import { enviarMensagem, mostrarDigitando, parseWebhook } from './evolution.js';
-import { adicionarMensagem, salvarConversa, getConversa, fb } from './firebase.js';
+import { processarMensagem, transcreverAudio } from './ai.js';
+import { enviarMensagem, mostrarDigitando, parseWebhook, baixarMidiaBase64 } from './evolution.js';
+import { adicionarMensagem, salvarConversa, getConversa, upsertCliente, fb } from './firebase.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -113,6 +113,51 @@ app.post('/webhook', async (req, res) => {
   if (!msg) return;
 
   console.log(`📥 ${msg.telefone} (${msg.pushName || '?'}): ${msg.texto.slice(0, 80)}`);
+
+  // Se o cliente mandou localização, salva no Firebase e confirma
+  if (msg.localizacao) {
+    try {
+      await upsertCliente({
+        telefone: msg.telefone,
+        endereco: 'Localização',
+        localizacao: msg.localizacao,
+      });
+      await adicionarMensagem(msg.telefone, { role: 'user', texto: msg.texto, pushName: msg.pushName });
+      console.log(`📍 Localização recebida de ${msg.telefone}: ${msg.localizacao.lat}, ${msg.localizacao.lng}`);
+    } catch (e) {
+      console.error('Erro ao salvar localização:', e.message);
+    }
+  }
+
+  // Se o cliente mandou áudio, transcreve antes de processar
+  if (msg.audio && msg.messageKey) {
+    console.log(`🎤 Áudio recebido de ${msg.telefone}, baixando e transcrevendo...`);
+    try {
+      // Mostra "gravando áudio..." enquanto transcreve
+      mostrarDigitando(msg.telefone, 5000).catch(() => {});
+
+      // Baixa o áudio da Evolution API
+      const midia = await baixarMidiaBase64(msg.messageKey);
+      if (midia?.base64) {
+        // Transcreve usando Gemini
+        const transcricao = await transcreverAudio(midia.base64, midia.mimetype);
+        if (transcricao && !transcricao.includes('[erro') && !transcricao.includes('[áudio não')) {
+          msg.texto = transcricao;
+          console.log(`✅ Áudio transcrito: "${transcricao.slice(0, 80)}"`);
+        } else {
+          // Não conseguiu transcrever, avisa o cliente
+          msg.texto = '[O cliente enviou um áudio mas não foi possível entender. Peça educadamente para ele digitar a mensagem.]';
+          console.log(`⚠ Áudio não compreendido de ${msg.telefone}`);
+        }
+      } else {
+        msg.texto = '[O cliente enviou um áudio mas não foi possível baixar. Peça educadamente para ele digitar a mensagem.]';
+        console.log(`⚠ Não conseguiu baixar áudio de ${msg.telefone}`);
+      }
+    } catch (e) {
+      console.error('Erro ao processar áudio:', e.message);
+      msg.texto = '[O cliente enviou um áudio mas houve um erro ao processar. Peça educadamente para ele digitar.]';
+    }
+  }
 
   // Processa na fila
   processarComFila(msg.telefone, msg.texto, msg.pushName).catch(e =>
@@ -234,10 +279,33 @@ app.get('/backup', async (req, res) => {
   }
 });
 
+// ── Liga/Desliga entrega ──
+app.post('/entrega', async (req, res) => {
+  if (!checkBotToken(req, res)) return;
+  try {
+    const ativa = req.body?.ativa;
+    if (typeof ativa !== 'boolean') return res.status(400).json({ error: 'Campo "ativa" (boolean) é obrigatório' });
+    const config = (await fb.get('config')) || {};
+    config.entrega_ativa = ativa;
+    config.entrega_alteradoEm = Date.now();
+    await fb.put('config', config);
+    console.log(`🚚 Entrega ${ativa ? 'ATIVADA' : 'DESATIVADA'}`);
+    res.json({ ok: true, entrega_ativa: ativa });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Status geral do bot (pra aba Atendimento mostrar)
 app.get('/status', async (req, res) => {
+  let entregaAtiva = true;
+  try {
+    const config = (await fb.get('config')) || {};
+    entregaAtiva = config.entrega_ativa !== false;
+  } catch {}
   res.json({
     online: true,
+    entrega_ativa: entregaAtiva,
     instance: process.env.EVOLUTION_INSTANCE || '',
     modelo: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
     temGemini: !!process.env.GEMINI_API_KEY,
