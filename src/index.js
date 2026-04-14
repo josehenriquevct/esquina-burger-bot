@@ -7,6 +7,9 @@ import { processarMensagem, transcreverAudio } from './ai.js';
 import { enviarMensagem, mostrarDigitando, parseWebhook, baixarMidiaBase64 } from './evolution.js';
 import { adicionarMensagem, salvarConversa, getConversa, upsertCliente, fb } from './firebase.js';
 
+// Ignora mensagens anteriores ao boot (evita flood pos-redeploy)
+const BOT_STARTED_AT = Math.floor(Date.now() / 1000);
+
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
@@ -111,6 +114,13 @@ app.post('/webhook', async (req, res) => {
 
   const msg = parseWebhook(req.body);
   if (!msg) return;
+
+    // Ignora mensagens anteriores ao boot do bot (evita flood pos-redeploy)
+    const msgTs = Number(req.body?.data?.messageTimestamp || 0);
+    if (msgTs && msgTs < BOT_STARTED_AT) {
+          console.log(`⏭ Ignorando msg antiga de ${msg.telefone} (ts=${msgTs} < boot=${BOT_STARTED_AT})`);
+          return;
+    }
 
   console.log(`📥 ${msg.telefone} (${msg.pushName || '?'}): ${msg.texto.slice(0, 80)}`);
 
