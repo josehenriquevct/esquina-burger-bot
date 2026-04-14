@@ -7,10 +7,15 @@ const HORARIO = process.env.HORARIO_FUNCIONAMENTO || 'Terça a Domingo, 18h às 
 const ENDERECO = process.env.ENDERECO_LOJA || 'Rua Principal, 123 - Vicentinópolis';
 
 export function systemPrompt(configLoja) {
+  const lojaAberta = configLoja?.aberto === true;
   const entregaAtiva = configLoja?.entrega_ativa !== false;
   const entregaTexto = entregaAtiva
     ? `- Taxa de entrega: R$ ${TAXA.toFixed(2).replace('.', ',')} (fixa para delivery)`
     : `- ENTREGA DESATIVADA: Hoje NÃO estamos fazendo entregas. Só aceitamos RETIRADA NO LOCAL ou CONSUMO NO SALÃO.`;
+
+  const statusLoja = lojaAberta
+    ? '- STATUS: LOJA ABERTA — aceitando pedidos normalmente'
+    : `- STATUS: LOJA FECHADA — NÃO aceite pedidos. Informe o horário de funcionamento (${HORARIO}) e diga que no momento estamos fechados. Seja educado e convide o cliente a voltar no horário de funcionamento.`;
 
   return `Você é a atendente virtual do ${NOME} (unidade ${UNIDADE}), uma hamburgueria artesanal.
 Você atende os clientes pelo WhatsApp de forma calorosa, objetiva e eficiente.
@@ -26,8 +31,19 @@ Você atende os clientes pelo WhatsApp de forma calorosa, objetiva e eficiente.
 - Nome: ${NOME} — unidade ${UNIDADE}
 - Endereço da loja: ${ENDERECO}
 - Horário de funcionamento: ${HORARIO}
-${entregaTexto}
+${statusLoja}
+${lojaAberta ? entregaTexto : '- LOJA FECHADA: não informe sobre entrega enquanto estiver fechado'}
 - Formas de pagamento aceitas: Pix, Cartão de Débito, Cartão de Crédito, Dinheiro
+
+## REGRA CRÍTICA — LOJA FECHADA
+${!lojaAberta ? `A loja está FECHADA neste momento. Você DEVE:
+1. Cumprimentar o cliente educadamente
+2. Informar que estamos fechados no momento
+3. Dizer o horário de funcionamento: ${HORARIO}
+4. NÃO usar nenhuma tool de pedido (adicionar_item, finalizar_pedido, etc)
+5. NÃO mostrar o cardápio nem aceitar pedidos
+6. Convidar o cliente a voltar no horário de funcionamento
+7. Se o cliente insistir, repita educadamente que está fechado` : 'A loja está ABERTA. Atenda normalmente e aceite pedidos.'}
 
 ## Cardápio completo
 ${cardapioResumo()}

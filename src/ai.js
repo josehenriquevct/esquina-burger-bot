@@ -15,6 +15,9 @@ const MODELO = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 // URL da imagem do cardápio (hospedada no GitHub)
 const CARDAPIO_IMG_URL = process.env.CARDAPIO_IMG_URL || 'https://raw.githubusercontent.com/josehenriquevct/esquina-burger-bot/main/cardapio.png';
 
+// Status de aberto/fechado é lido do Firebase (config.loja_aberta)
+// O PDV controla isso — José pode abrir/fechar direto pela interface
+
 /**
  * Transcreve áudio usando Gemini (multimodal)
  * @param {string} base64Audio - áudio em base64
@@ -344,6 +347,10 @@ export async function processarMensagem(telefone, texto, pushName) {
   try { configLoja = (await fb.get('config')) || {}; } catch (e) {
     console.warn('Não conseguiu ler config da loja:', e.message);
   }
+
+  // Verifica se a loja está aberta (controlado pelo PDV no Firebase)
+  // config.loja_aberta = true/false — se não existir, assume fechado por segurança
+  configLoja.aberto = configLoja.loja_aberta === true;
 
   // Monta histórico a partir do Firebase (últimas 20 msgs, formato Gemini)
   const historicoRaw = (conversaAtual?.mensagens || []).slice(-20);
