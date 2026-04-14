@@ -326,6 +326,178 @@ app.post('/entrega', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Rastreio ao vivo — página que o cliente abre pra acompanhar a entrega ──
+app.get('/rastreio/:pedidoId', async (req, res) => {
+  try {
+    const pedido = await fb.get(`pedidos_abertos/${req.params.pedidoId}`);
+    if (!pedido) return res.status(404).send('Pedido não encontrado');
+
+    const nomeRestaurante = process.env.RESTAURANTE_NOME || 'Esquina Burger';
+
+    // Página HTML com mapa ao vivo
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rastreio - ${nomeRestaurante}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, sans-serif; background: #1a1a1a; color: #fff; }
+    .header { background: #222; padding: 16px 20px; text-align: center; }
+    .header h1 { font-size: 18px; color: #e63946; }
+    .header p { font-size: 13px; color: #aaa; margin-top: 4px; }
+    .status { padding: 12px 20px; text-align: center; font-size: 14px; }
+    .status.entregando { background: #2d8a4e; }
+    .status.aguardando { background: #e6a817; color: #000; }
+    .status.entregue { background: #333; }
+    #map { width: 100%; height: 60vh; background: #333; }
+    .info { padding: 16px 20px; }
+    .info p { font-size: 14px; color: #ccc; margin-bottom: 6px; }
+    .info .nome { font-size: 16px; font-weight: bold; color: #fff; }
+    .atualizado { text-align: center; padding: 8px; font-size: 11px; color: #666; }
+  </style>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+  <div class="header">
+    <h1>🍔 ${nomeRestaurante}</h1>
+    <p>Acompanhe sua entrega em tempo real</p>
+  </div>
+  <div id="statusBar" class="status aguardando">Localizando entregador...</div>
+  <div id="map"></div>
+  <div class="info">
+    <p class="nome">Pedido #${req.params.pedidoId.slice(-6)}</p>
+    <p>👤 ${pedido.cliente?.nome || ''}</p>
+    <p>📦 ${(pedido.itens || []).map(i => i.qtd + 'x ' + i.nome).join(', ')}</p>
+  </div>
+  <div id="atualizacao" class="atualizado"></div>
+
+  <script>
+    const FIREBASE_URL = '${process.env.FIREBASE_DB_URL}'.replace(/\\/$/, '');
+    const entregadorTel = '${pedido.entregador || ''}';
+    const pedidoId = '${req.params.pedidoId}';
+
+    // Inicializa mapa (centro do Brasil como fallback)
+    const map = L.map('map').setView([-15.8, -49.8], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    let marker = null;
+    let destMarker = null;
+    let centered = false;
+
+    // Marca destino se tiver localização do cliente
+    const clienteLoc = ${JSON.stringify(pedido.cliente?.localizacao || null)};
+    if (clienteLoc && clienteLoc.lat) {
+      destMarker = L.marker([clienteLoc.lat, clienteLoc.lng], {
+        icon: L.divIcon({ html: '📍', className: 'emoji-icon', iconSize: [30, 30] })
+      }).addTo(map).bindPopup('Seu endereço');
+    }
+
+    async function atualizar() {
+      try {
+        // Verifica status do pedido
+        const pedidoRes = await fetch(FIREBASE_URL + '/pedidos_abertos/' + pedidoId + '.json');
+        const pedidoData = await pedidoRes.json();
+
+        if (!pedidoData) {
+          document.getElementById('statusBar').textContent = 'Pedido não encontrado';
+          return;
+        }
+
+        if (pedidoData.status === 'entregue') {
+          document.getElementById('statusBar').className = 'status entregue';
+          document.getElementById('statusBar').textContent = '✅ Pedido entregue!';
+          return;
+        }
+
+        const tel = pedidoData.entregador || entregadorTel;
+        if (!tel) {
+          document.getElementById('statusBar').className = 'status aguardando';
+          document.getElementById('statusBar').textContent = '⏳ Preparando seu pedido...';
+          return;
+        }
+
+        // Busca localização do entregador
+        const res = await fetch(FIREBASE_URL + '/entregadores/' + tel + '.json');
+        const entregador = await res.json();
+
+        if (entregador && entregador.localizacao && entregador.localizacao.lat) {
+          const lat = entregador.localizacao.lat;
+          const lng = entregador.localizacao.lng;
+
+          document.getElementById('statusBar').className = 'status entregando';
+          document.getElementById('statusBar').textContent = '🏍 ' + (entregador.nome || 'Entregador') + ' está a caminho!';
+
+          if (!marker) {
+            marker = L.marker([lat, lng], {
+              icon: L.divIcon({ html: '🏍', className: 'emoji-icon', iconSize: [30, 30] })
+            }).addTo(map);
+          } else {
+            marker.setLatLng([lat, lng]);
+          }
+
+          if (!centered) {
+            map.setView([lat, lng], 15);
+            centered = true;
+          }
+
+          const tempo = entregador.localizacao.atualizadoEm;
+          if (tempo) {
+            const seg = Math.round((Date.now() - tempo) / 1000);
+            document.getElementById('atualizacao').textContent = 'Atualizado há ' + seg + ' segundos';
+          }
+        }
+      } catch (e) {
+        console.warn('Erro ao atualizar:', e);
+      }
+    }
+
+    // Atualiza a cada 5 segundos
+    atualizar();
+    setInterval(atualizar, 5000);
+  </script>
+</body>
+</html>`);
+  } catch (e) {
+    res.status(500).send('Erro: ' + e.message);
+  }
+});
+
+// ── Mapa de todos os entregadores (pro PDV) ──
+app.get('/entregadores/mapa', async (req, res) => {
+  if (!checkBotToken(req, res)) return;
+  try {
+    const entregadores = (await fb.get('entregadores')) || {};
+    const lista = Object.entries(entregadores).map(([tel, e]) => ({
+      telefone: tel,
+      nome: e.nome || '',
+      online: e.online || false,
+      status: e.status || 'pendente',
+      localizacao: e.localizacao || null,
+      totalEntregas: e.totalEntregas || 0,
+    }));
+    res.json({ entregadores: lista });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Aprovar/Bloquear entregador (pro PDV) ──
+app.post('/entregadores/aprovar', async (req, res) => {
+  if (!checkBotToken(req, res)) return;
+  try {
+    const tel = phoneKey(req.body?.telefone);
+    const acao = req.body?.acao; // 'aprovado' ou 'bloqueado'
+    if (!tel || !acao) return res.status(400).json({ error: 'telefone e acao obrigatórios' });
+    await fb.patch(`entregadores/${tel}`, { status: acao, aprovadoEm: Date.now() });
+    console.log(`👤 Entregador ${tel} → ${acao}`);
+    res.json({ ok: true, telefone: tel, status: acao });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Localização de um cliente (pro entregador) ──
 app.get('/localizacao/:telefone', async (req, res) => {
   if (!checkBotToken(req, res)) return;
