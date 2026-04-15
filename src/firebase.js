@@ -125,9 +125,48 @@ export async function upsertCliente(cliente) {
 
 export async function getConfigLoja() {
   try {
-    return (await fb.get('config')) || {};
+    const botConfig = (await fb.get('bot_config')) || {};
+    const bot = botConfig.bot || {};
+    const entrega = botConfig.entrega || {};
+
+    let aberto = true;
+    if (bot.horarioAtivo) {
+      const agora = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      const hora = agora.getHours();
+      const min = agora.getMinutes();
+      const horaAtual = hora * 60 + min;
+      const dia = agora.getDay();
+
+      const [hAbre, mAbre] = (bot.horaAbertura || '18:00').split(':').map(Number);
+      const [hFecha, mFecha] = (bot.horaFechamento || '23:30').split(':').map(Number);
+      const minAbre = hAbre * 60 + mAbre;
+      const minFecha = hFecha * 60 + mFecha;
+      const diasPermitidos = bot.diasFuncionamento || [0,1,2,3,4,5,6];
+
+      if (!diasPermitidos.includes(dia)) {
+        aberto = false;
+      } else if (minFecha > minAbre) {
+        aberto = horaAtual >= minAbre && horaAtual <= minFecha;
+      } else {
+        aberto = horaAtual >= minAbre || horaAtual <= minFecha;
+      }
+    }
+
+    return {
+      entrega_ativa: bot.entregaAtiva !== false,
+      taxa_entrega: entrega.taxa || 5,
+      loja_aberta: aberto,
+      horario_abre: bot.horaAbertura || '18:00',
+      horario_fecha: bot.horaFechamento || '23:30',
+      msg_fechado: bot.msgFechado || '',
+      horario_ativo: bot.horarioAtivo || false,
+      menu_image_url: bot.menuImageUrl || '',
+      chave_pix: bot.chavePix || '',
+      tipo_chave_pix: bot.tipoChavePix || '',
+      nome_recebedor: bot.nomeRecebedor || '',
+    };
   } catch (e) {
-    console.warn('Erro ao ler config da loja:', e.message);
+    console.warn('Erro ao ler bot_config:', e.message);
     return {};
   }
 }

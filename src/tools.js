@@ -1,6 +1,6 @@
 // ── Definição e execução das tools do Gemini ───────────────────
 import { config } from './config.js';
-import { buscarItem, itensPorCategoria } from './cardapio.js';
+import { buscarItem, buscarAdicional, itensPorCategoria } from './cardapio.js';
 import {
   getCarrinho, getDados, limparEstado, limparCarrinho,
   totalCarrinho, removerDoCarrinho,
@@ -131,7 +131,7 @@ export async function executarTool(telefone, nome, args) {
   switch (nome) {
     // ── Cardápio ─────────────────────────────────────────────
     case 'ver_cardapio_categoria':
-      return itensPorCategoria(args.categoria);
+      return await itensPorCategoria(args.categoria);
 
     case 'enviar_foto_cardapio': {
       try {
@@ -146,7 +146,7 @@ export async function executarTool(telefone, nome, args) {
 
     // ── Carrinho ─────────────────────────────────────────────
     case 'adicionar_item': {
-      const item = buscarItem(args.nome_ou_id);
+      const item = await buscarItem(args.nome_ou_id);
       if (!item) return { sucesso: false, erro: `Item "${args.nome_ou_id}" não encontrado no cardápio.` };
 
       const qtd = Math.max(1, parseInt(args.quantidade || 1));

@@ -43,7 +43,10 @@ export async function processarMensagem(telefone, texto, pushName) {
 
   // Config da loja (entrega_ativa, etc.)
   const configLoja = await getConfigLoja();
-  // loja_aberta vem do Firebase (controlado pelo endpoint /loja)
+  // Se fora do horário, responde com mensagem de fechado
+  if (configLoja.horario_ativo && !configLoja.loja_aberta && configLoja.msg_fechado) {
+    return configLoja.msg_fechado;
+  }
 
   // Passa dados salvos do cliente pro prompt
   const loc = dados.localizacao || null;
@@ -68,7 +71,7 @@ export async function processarMensagem(telefone, texto, pushName) {
   const model = genAI.getGenerativeModel({
     model: MODELO,
     tools: TOOL_DECLARATIONS,
-    systemInstruction: systemPrompt(configLoja),
+    systemInstruction: await systemPrompt(configLoja),
     generationConfig: {
       temperature: 0.7,
       maxOutputTokens: 1024,

@@ -2,10 +2,12 @@
 import { config } from './config.js';
 import { cardapioResumo } from './cardapio.js';
 
-const { nome, unidade, endereco, horario, taxaEntrega } = config.restaurante;
+const { nome, unidade, endereco, horario: horarioPadrao, taxaEntrega: taxaPadrao } = config.restaurante;
 
-export function systemPrompt(configLoja) {
+export async function systemPrompt(configLoja) {
   const entregaAtiva = configLoja?.entrega_ativa !== false;
+  const horario = configLoja?.horario_abre ? configLoja.horario_abre + ' as ' + configLoja.horario_fecha : horarioPadrao;
+  const taxaEntrega = configLoja?.taxa_entrega || taxaPadrao;
   const lojaAberta = configLoja?.loja_aberta !== false;
 
   // Info sobre entrega
@@ -45,11 +47,11 @@ INFORMACOES DA LOJA:
 - Endereco: ${endereco}
 - Horario: ${horario}
 ${entregaTexto}
-- Pagamento: Pix, Debito, Credito, Dinheiro
+- Pagamento: Pix, Debito, Credito, Dinheiro${configLoja?.chave_pix ? '\n- Chave Pix: ' + configLoja.tipo_chave_pix + ' ' + configLoja.chave_pix + ' (' + configLoja.nome_recebedor + ')' : ''}
 ${dadosClienteTexto}
 
 CARDAPIO:
-${cardapioResumo()}
+${await cardapioResumo()}
 
 ${!lojaAberta ? 'LOJA FECHADA: A loja esta FECHADA agora. NAO aceite pedidos. Informe educadamente: "Oi! No momento estamos fechados 😔 Nosso horario e ' + horario + '. Te esperamos!" Se o cliente perguntar algo sobre o cardapio, pode responder, mas NAO finalize pedidos.\n\n' : ''}FLUXO DE ATENDIMENTO:
 
