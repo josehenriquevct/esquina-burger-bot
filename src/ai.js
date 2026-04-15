@@ -33,6 +33,7 @@ export async function transcreverAudio(base64Audio, mimetype = 'audio/ogg') {
 // ── Processar mensagem do cliente ──────────────────────────────
 
 export async function processarMensagem(telefone, texto, pushName) {
+  console.log("BOT v2.1 - processando msg");
   // Se pausado para humano, não responde
   const conversaAtual = await getConversa(telefone).catch(() => null);
   if (conversaAtual?.status === 'pausado_humano') return null;
@@ -44,6 +45,7 @@ export async function processarMensagem(telefone, texto, pushName) {
   // Config da loja (entrega_ativa, etc.)
   const configLoja = await getConfigLoja();
   // Verifica horário do bot_config (Firebase/PDV)
+  console.log("CONFIG:", JSON.stringify({horario_ativo: configLoja.horario_ativo, loja_aberta: configLoja.loja_aberta, msg: configLoja.msg_fechado?.slice(0,30)}));
   if (configLoja.horario_ativo && !configLoja.loja_aberta) {
     const msg = configLoja.msg_fechado || 'No momento estamos fechados. Te esperamos no proximo horario!';
     return msg;
