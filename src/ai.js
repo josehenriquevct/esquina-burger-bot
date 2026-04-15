@@ -43,7 +43,7 @@ export async function processarMensagem(telefone, texto, pushName) {
 
   // Config da loja (entrega_ativa, etc.)
   const configLoja = await getConfigLoja();
-  configLoja.aberto = true; // Bot atende 24h
+  // loja_aberta vem do Firebase (controlado pelo endpoint /loja)
 
   // Passa dados salvos do cliente pro prompt
   const loc = dados.localizacao || null;

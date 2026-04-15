@@ -72,13 +72,16 @@ router.get('/', (req, res) => {
 // Status (informação básica, sem dados sensíveis)
 router.get('/status', async (req, res) => {
   let entregaAtiva = true;
+  let lojaAberta = true;
   try {
     const cfg = (await fb.get('config')) || {};
     entregaAtiva = cfg.entrega_ativa !== false;
+    lojaAberta = cfg.loja_aberta !== false;
   } catch {}
   res.json({
     online: true,
     entrega_ativa: entregaAtiva,
+    loja_aberta: lojaAberta,
     timestamp: new Date().toISOString(),
   });
 });
@@ -231,6 +234,23 @@ router.post('/send', authMiddleware, async (req, res) => {
     await enviarMensagem(tel, texto);
     await adicionarMensagem(tel, { role: 'assistant', texto, manual: true });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+
+// Liga/desliga loja (aberta/fechada)
+router.post('/loja', authMiddleware, async (req, res) => {
+  const aberta = req.body?.aberta;
+  if (typeof aberta !== 'boolean') return res.status(400).json({ error: '"aberta" (boolean) obrigatório' });
+  try {
+    const cfg = (await fb.get('config')) || {};
+    cfg.loja_aberta = aberta;
+    cfg.loja_alteradoEm = Date.now();
+    await fb.put('config', cfg);
+    console.log(`🏪 Loja ${aberta ? 'ABERTA' : 'FECHADA'}`);
+    res.json({ ok: true, loja_aberta: aberta });
   } catch (e) {
     res.status(500).json({ error: 'Erro interno' });
   }

@@ -6,6 +6,7 @@ const { nome, unidade, endereco, horario, taxaEntrega } = config.restaurante;
 
 export function systemPrompt(configLoja) {
   const entregaAtiva = configLoja?.entrega_ativa !== false;
+  const lojaAberta = configLoja?.loja_aberta !== false;
 
   // Info sobre entrega
   const entregaTexto = entregaAtiva
@@ -50,7 +51,7 @@ ${dadosClienteTexto}
 CARDAPIO:
 ${cardapioResumo()}
 
-FLUXO DE ATENDIMENTO:
+${!lojaAberta ? 'LOJA FECHADA: A loja esta FECHADA agora. NAO aceite pedidos. Informe educadamente: "Oi! No momento estamos fechados 😔 Nosso horario e ' + horario + '. Te esperamos!" Se o cliente perguntar algo sobre o cardapio, pode responder, mas NAO finalize pedidos.\n\n' : ''}FLUXO DE ATENDIMENTO:
 
 1. SAUDACAO: cumprimente e ofereca mostrar o cardapio.
 
