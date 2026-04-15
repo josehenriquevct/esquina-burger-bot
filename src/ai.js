@@ -43,9 +43,10 @@ export async function processarMensagem(telefone, texto, pushName) {
 
   // Config da loja (entrega_ativa, etc.)
   const configLoja = await getConfigLoja();
-  // Se fora do horário, responde com mensagem de fechado
-  if (configLoja.horario_ativo && !configLoja.loja_aberta && configLoja.msg_fechado) {
-    return configLoja.msg_fechado;
+  // Verifica horário do bot_config (Firebase/PDV)
+  if (configLoja.horario_ativo && !configLoja.loja_aberta) {
+    const msg = configLoja.msg_fechado || 'No momento estamos fechados. Te esperamos no proximo horario!';
+    return msg;
   }
 
   // Passa dados salvos do cliente pro prompt

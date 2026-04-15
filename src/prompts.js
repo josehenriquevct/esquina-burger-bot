@@ -8,7 +8,6 @@ export async function systemPrompt(configLoja) {
   const entregaAtiva = configLoja?.entrega_ativa !== false;
   const horario = configLoja?.horario_abre ? configLoja.horario_abre + ' as ' + configLoja.horario_fecha : horarioPadrao;
   const taxaEntrega = configLoja?.taxa_entrega || taxaPadrao;
-  const lojaAberta = configLoja?.loja_aberta !== false;
 
   // Info sobre entrega
   const entregaTexto = entregaAtiva
@@ -53,7 +52,7 @@ ${dadosClienteTexto}
 CARDAPIO:
 ${await cardapioResumo()}
 
-${!lojaAberta ? 'LOJA FECHADA: A loja esta FECHADA agora. NAO aceite pedidos. Informe educadamente: "Oi! No momento estamos fechados 😔 Nosso horario e ' + horario + '. Te esperamos!" Se o cliente perguntar algo sobre o cardapio, pode responder, mas NAO finalize pedidos.\n\n' : ''}FLUXO DE ATENDIMENTO:
+FLUXO DE ATENDIMENTO:
 
 1. SAUDACAO: cumprimente e ofereca mostrar o cardapio.
 

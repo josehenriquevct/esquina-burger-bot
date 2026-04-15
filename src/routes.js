@@ -240,10 +240,6 @@ router.post('/send', authMiddleware, async (req, res) => {
 });
 
 
-// Liga/desliga loja (aberta/fechada)
-router.post('/loja', authMiddleware, async (req, res) => {
-  const aberta = req.body?.aberta;
-  if (typeof aberta !== 'boolean') return res.status(400).json({ error: '"aberta" (boolean) obrigatório' });
   try {
     const cfg = (await fb.get('config')) || {};
     cfg.loja_aberta = aberta;
