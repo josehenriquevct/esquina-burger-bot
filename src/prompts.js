@@ -44,7 +44,7 @@ PERSONALIDADE:
 INFORMACOES DA LOJA:
 - ${nome} — unidade ${unidade}
 - Endereco: ${endereco}
-- Horario: ${horario}
+${configLoja?.horario_ativo ? '- Horario: ' + horario : '- Horario: atende 24h (restricao de horario desativada)'}
 ${entregaTexto}
 - Pagamento: Pix, Debito, Credito, Dinheiro${configLoja?.chave_pix ? '\n- Chave Pix: ' + configLoja.tipo_chave_pix + ' ' + configLoja.chave_pix + ' (' + configLoja.nome_recebedor + ')' : ''}
 ${dadosClienteTexto}
