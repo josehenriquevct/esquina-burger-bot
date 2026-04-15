@@ -46,20 +46,18 @@ setInterval(() => {
 // Verifica se o webhook veio realmente da Evolution API
 
 export function verificarWebhookToken(req) {
-  if (!config.webhookToken) return true; // sem token = sem verificação
+  if (!config.webhookToken) return true;
 
-  const token = req.headers['x-webhook-token'] || req.query?.token;
+  // Aceita token via header OU query string (Evolution API usa query)
+  const token = req.headers['x-webhook-token'] || req.headers['apikey'] || req.query?.token;
   if (!token) return false;
 
-  // Comparação timing-safe para evitar timing attacks
-  try {
-    return crypto.timingSafeEqual(
-      Buffer.from(token, 'utf8'),
-      Buffer.from(config.webhookToken, 'utf8')
-    );
-  } catch {
-    return false;
-  }
+  // Se os tamanhos forem diferentes, timingSafeEqual dá erro
+  const a = Buffer.from(String(token), 'utf8');
+  const b = Buffer.from(String(config.webhookToken), 'utf8');
+  if (a.length !== b.length) return false;
+
+  return crypto.timingSafeEqual(a, b);
 }
 
 // ── Verificação de token da API ────────────────────────────────
