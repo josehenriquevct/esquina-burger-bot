@@ -62,13 +62,25 @@ export async function processarMensagem(telefone, texto, pushName) {
   };
 
   // Monta histórico (últimas 20 msgs, formato Gemini)
+  // Gemini exige alternancia user/model. Corrige msgs duplicadas.
   const historicoRaw = (conversaAtual?.mensagens || []).slice(-20);
-  const history = historicoRaw
+  const historyRaw = historicoRaw
     .map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: m.texto || m.content || '' }],
     }))
     .filter(m => m.parts[0].text);
+  const history = [];
+  for (const msg of historyRaw) {
+    if (history.length > 0 && history[history.length - 1].role === msg.role) {
+      history[history.length - 1].parts[0].text += ' ' + msg.parts[0].text;
+    } else {
+      history.push(msg);
+    }
+  }
+  while (history.length > 0 && history[0].role !== 'user') {
+    history.shift();
+  }
 
   // Inicializa chat com Gemini
   const model = genAI.getGenerativeModel({
