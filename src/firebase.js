@@ -1,39 +1,35 @@
 // ── Cliente Firebase Realtime Database via REST ────────────────
-// Agora com autenticação via auth secret
 import fetch from 'node-fetch';
 import { config } from './config.js';
 
 if (!config.firebase.dbUrl) {
-  throw new Error('FIREBASE_DB_URL não configurado');
+  throw new Error('FIREBASE_DB_URL nao configurado');
 }
 
-const base = config.firebase.dbUrl.replace(/\/$/, '');
-const authParam = config.firebase.authSecret ? `?auth=${config.firebase.authSecret}` : '';
+var base = config.firebase.dbUrl.replace(/\/$/, '');
+var authParam = config.firebase.authSecret ? ('?auth=' + config.firebase.authSecret) : '';
 
 async function req(method, path, body) {
-  // Adiciona auth secret como parâmetro (formato Firebase REST)
-  const separator = authParam ? '&' : '?';
-  const url = `${base}/${path}.json${authParam}`;
+  var url = base + '/' + path + '.json' + authParam;
 
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
   if (body !== undefined) opts.body = JSON.stringify(body);
 
-  const res = await fetch(url, opts);
+  var res = await fetch(url, opts);
   if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    // Nunca loga a URL completa (contém o auth secret)
-    throw new Error(`Firebase ${method} ${path} → ${res.status}: ${txt}`);
+    var txt = await res.text().catch(function() { return ''; });
+    throw new Error('Firebase ' + method + ' ' + path + ' -> ' + res.status + ': ' + txt);
   }
   if (res.status === 204) return null;
   return res.json();
 }
 
-export const fb = {
-  get:   (path)       => req('GET',    path),
-  put:   (path, body) => req('PUT',    path, body),
-  post:  (path, body) => req('POST',   path, body),
-  patch: (path, body) => req('PATCH',  path, body),
-  del:   (path)       => req('DELETE', path),
+export var fb = {
+  get:   function(path)       { return req('GET',    path); },
+  put:   function(path, body) { return req('PUT',    path, body); },
+  post:  function(path, body) { return req('POST',   path, body); },
+  patch: function(path, body) { return req('PATCH',  path, body); },
+  del:   function(path)       { return req('DELETE', path); },
 };
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -45,20 +41,20 @@ function phoneKey(telefone) {
 // ── Conversas ──────────────────────────────────────────────────
 
 export async function getConversa(telefone) {
-  return (await fb.get(`bot_conversas/${phoneKey(telefone)}`)) || null;
+  return (await fb.get('bot_conversas/' + phoneKey(telefone))) || null;
 }
 
 export async function salvarConversa(telefone, dados) {
-  const key = phoneKey(telefone);
-  const atual = (await fb.get(`bot_conversas/${key}`)) || {};
-  const merged = { ...atual, ...dados, atualizadoEm: Date.now() };
-  await fb.put(`bot_conversas/${key}`, merged);
+  var key = phoneKey(telefone);
+  var atual = (await fb.get('bot_conversas/' + key)) || {};
+  var merged = Object.assign({}, atual, dados, { atualizadoEm: Date.now() });
+  await fb.put('bot_conversas/' + key, merged);
   return merged;
 }
 
 export async function adicionarMensagem(telefone, msg) {
-  const key = phoneKey(telefone);
-  const conversa = (await fb.get(`bot_conversas/${key}`)) || {
+  var key = phoneKey(telefone);
+  var conversa = (await fb.get('bot_conversas/' + key)) || {
     telefone: key,
     criadoEm: Date.now(),
     mensagens: [],
@@ -66,107 +62,107 @@ export async function adicionarMensagem(telefone, msg) {
   };
 
   if (!Array.isArray(conversa.mensagens)) conversa.mensagens = [];
-  conversa.mensagens.push({ ...msg, timestamp: Date.now() });
+  conversa.mensagens.push(Object.assign({}, msg, { timestamp: Date.now() }));
 
-  // Mantém últimas 40 mensagens
   if (conversa.mensagens.length > 40) {
     conversa.mensagens = conversa.mensagens.slice(-40);
   }
 
   conversa.ultimaMsg = msg.texto || '';
   conversa.atualizadoEm = Date.now();
-  await fb.put(`bot_conversas/${key}`, conversa);
+  await fb.put('bot_conversas/' + key, conversa);
   return conversa;
 }
 
 // ── Pedidos ────────────────────────────────────────────────────
 
 export async function criarPedidoAberto(pedido) {
-  const key = `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const codigoConfirmacao = String(Math.floor(1000 + Math.random() * 9000));
+  var key = 'bot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  var codigoConfirmacao = String(Math.floor(1000 + Math.random() * 9000));
 
-  const payload = {
-    ...pedido,
+  var payload = Object.assign({}, pedido, {
     origem: 'whatsapp-bot',
     autoAceito: true,
     status: 'aguardando',
-    codigoConfirmacao,
+    codigoConfirmacao: codigoConfirmacao,
     criadoEm: Date.now(),
-  };
+  });
 
-  await fb.put(`pedidos_abertos/${key}`, payload);
-  return { key, codigoConfirmacao, ...payload };
+  await fb.put('pedidos_abertos/' + key, payload);
+  return Object.assign({ key: key, codigoConfirmacao: codigoConfirmacao }, payload);
 }
 
 // ── Clientes ───────────────────────────────────────────────────
 
 export async function getCliente(telefone) {
-  const key = phoneKey(telefone);
-  return (await fb.get(`clientes_bot/${key}`)) || null;
+  var key = phoneKey(telefone);
+  return (await fb.get('clientes_bot/' + key)) || null;
 }
 
 export async function upsertCliente(cliente) {
-  const key = phoneKey(cliente.telefone);
+  var key = phoneKey(cliente.telefone);
   if (!key) return null;
 
-  const atual = (await fb.get(`clientes_bot/${key}`)) || {
+  var atual = (await fb.get('clientes_bot/' + key)) || {
     id: Date.now(),
     criadoEm: Date.now(),
     pedidos: 0,
     totalGasto: 0,
   };
 
-  const merged = { ...atual, ...cliente, telefone: key, atualizadoEm: Date.now() };
-  await fb.put(`clientes_bot/${key}`, merged);
+  var merged = Object.assign({}, atual, cliente, { telefone: key, atualizadoEm: Date.now() });
+  await fb.put('clientes_bot/' + key, merged);
   return merged;
 }
 
-// ── Config da loja ─────────────────────────────────────────────
+// ── Config da loja (le do bot_config no Firebase) ──────────────
 
 export async function getConfigLoja() {
   try {
-    const botConfig = (await fb.get('bot_config')) || {};
-    const bot = botConfig.bot || {};
-    const entrega = botConfig.entrega || {};
+    var botCfg = (await fb.get('bot_config/bot')) || {};
+    var entregaCfg = (await fb.get('bot_config/entrega')) || {};
 
-    let aberto = true;
-    if (bot.horarioAtivo) {
-      const agora = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-      const hora = agora.getHours();
-      const min = agora.getMinutes();
-      const horaAtual = hora * 60 + min;
-      const dia = agora.getDay();
+    // Calcula se a loja esta aberta
+    var lojaAberta = true;
+    var horarioAtivo = botCfg.horarioAtivo === true;
 
-      const [hAbre, mAbre] = (bot.horaAbertura || '18:00').split(':').map(Number);
-      const [hFecha, mFecha] = (bot.horaFechamento || '23:30').split(':').map(Number);
-      const minAbre = hAbre * 60 + mAbre;
-      const minFecha = hFecha * 60 + mFecha;
-      const diasPermitidos = bot.diasFuncionamento || [0,1,2,3,4,5,6];
+    if (horarioAtivo && botCfg.horaAbertura && botCfg.horaFechamento) {
+      var agora = new Date();
+      var brTime = new Date(agora.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      var horaAtual = brTime.getHours() * 60 + brTime.getMinutes();
+      var partsAbre = botCfg.horaAbertura.split(':').map(Number);
+      var partsFecha = botCfg.horaFechamento.split(':').map(Number);
+      var minAbre = partsAbre[0] * 60 + (partsAbre[1] || 0);
+      var minFecha = partsFecha[0] * 60 + (partsFecha[1] || 0);
 
-      if (!diasPermitidos.includes(dia)) {
-        aberto = false;
-      } else if (minFecha > minAbre) {
-        aberto = horaAtual >= minAbre && horaAtual <= minFecha;
+      if (minAbre < minFecha) {
+        lojaAberta = horaAtual >= minAbre && horaAtual <= minFecha;
       } else {
-        aberto = horaAtual >= minAbre || horaAtual <= minFecha;
+        lojaAberta = horaAtual >= minAbre || horaAtual <= minFecha;
+      }
+
+      // Verifica dia da semana
+      var diaSemana = brTime.getDay();
+      if (Array.isArray(botCfg.diasFuncionamento) && botCfg.diasFuncionamento.indexOf(diaSemana) === -1) {
+        lojaAberta = false;
       }
     }
 
     return {
-      entrega_ativa: bot.entregaAtiva !== false,
-      taxa_entrega: entrega.taxa || 5,
-      loja_aberta: aberto,
-      horario_abre: bot.horaAbertura || '18:00',
-      horario_fecha: bot.horaFechamento || '23:30',
-      msg_fechado: bot.msgFechado || '',
-      horario_ativo: bot.horarioAtivo || false,
-      menu_image_url: bot.menuImageUrl || '',
-      chave_pix: bot.chavePix || '',
-      tipo_chave_pix: bot.tipoChavePix || '',
-      nome_recebedor: bot.nomeRecebedor || '',
+      entrega_ativa: botCfg.entregaAtiva !== false,
+      taxa_entrega: entregaCfg.taxa || 5,
+      horario_ativo: horarioAtivo,
+      horario_abre: botCfg.horaAbertura || '',
+      horario_fecha: botCfg.horaFechamento || '',
+      loja_aberta: lojaAberta,
+      msg_fechado: botCfg.msgFechado || 'Estamos fechados no momento. Volte no nosso horario de funcionamento.',
+      chave_pix: botCfg.chavePix || '',
+      tipo_chave_pix: botCfg.tipoChavePix || '',
+      nome_recebedor: botCfg.nomeRecebedor || '',
+      menu_image_url: botCfg.menuImageUrl || '',
     };
   } catch (e) {
-    console.warn('Erro ao ler bot_config:', e.message);
+    console.warn('Erro ao ler config da loja:', e.message);
     return {};
   }
 }
