@@ -157,7 +157,7 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     systemInstruction: sysPrompt,
     generationConfig: {
       temperature: 0.7,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 400,
     },
   });
 
