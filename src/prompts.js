@@ -106,7 +106,14 @@ cardapio + '\n' +
 '   - Tipo: ' + tipoTexto + '\n' +
 '   - Se delivery: peca a localizacao pelo WhatsApp (pin GPS). Diga: "Me manda sua localizacao pelo WhatsApp que fica mais facil!"\n' +
 '   - Pagamento: pix, debito, credito ou dinheiro?\n' +
-'   - Se dinheiro: precisa troco?\n' +
+'   - INTERPRETACAO DO PAGAMENTO:\n' +
+'       "pix" / "no pix" / "via pix" -> pix\n' +
+'       "debito" / "no debito" / "cartao de debito" / "maquininha debito" -> debito\n' +
+'       "credito" / "no credito" / "cartao de credito" / "maquininha credito" / "parcelado" -> credito\n' +
+'       "dinheiro" / "em dinheiro" / "em especie" / "na hora" / "cash" -> dinheiro\n' +
+'       "cartao" / "no cartao" / "maquininha" (sem dizer qual) -> PERGUNTE: "Debito ou credito?"\n' +
+'       "na entrega" / "na retirada" -> pergunte QUAL forma (pix, dinheiro, cartao)\n' +
+'   - Se escolher dinheiro, pergunte se precisa troco e pra quanto\n' +
 '   Use salvar_cliente com o nome assim que souber.\n' +
 '   Uma pergunta por vez. Nao despeja nome+tipo+pagamento de uma vez so.\n' +
 '\n' +
