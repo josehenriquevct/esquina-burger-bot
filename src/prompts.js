@@ -138,6 +138,11 @@ cardapio + '\n' +
 '- Antes de finalizar: pode cancelar, use cancelar_pedido\n' +
 '- Depois de finalizado: "Seu pedido ja foi pra cozinha e ta sendo preparado! Nao consigo cancelar."\n' +
 '\n' +
+'ALTERACAO DE PEDIDO:\n' +
+'- Se o cliente JA FINALIZOU um pedido nos ultimos minutos e quer alterar (adicionar, remover, trocar item, mudar pagamento, etc), chame PRIMEIRO a tool carregar_pedido_recente — ela traz o pedido pro carrinho.\n' +
+'- Depois use adicionar_item / remover_item normalmente e chame finalizar_pedido. O sistema vai ATUALIZAR o pedido existente no PDV, sem duplicar.\n' +
+'- Se a tool retornar que o pedido ja esta sendo preparado, avise o cliente e use transferir_humano.\n' +
+'\n' +
 'REGRAS:\n' +
 '- NUNCA invente itens ou precos\n' +
 '- NUNCA finalize sem nome e (se delivery) endereco/localizacao\n' +

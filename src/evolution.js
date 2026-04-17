@@ -29,7 +29,7 @@ export async function enviarMensagem(telefone, texto) {
   await evoReq('/message/sendText/' + INSTANCE, 'POST', {
     number: numero,
     text: texto,
-    delay: 300,
+    delay: 800,
   });
   console.log('MSG -> ' + numero + ': ' + texto.slice(0, 60) + (texto.length > 60 ? '...' : ''));
 }

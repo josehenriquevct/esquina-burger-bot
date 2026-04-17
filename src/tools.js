@@ -1,11 +1,16 @@
 // ── Definição e execução das tools do Gemini ───────────────────
 import { config } from './config.js';
 import { buscarItem, buscarAdicional, itensPorCategoria } from './cardapio.js';
+import { totalCarrinho, removerDoCarrinho } from './state.js';
 import {
-  getCarrinho, getDados, limparEstado, limparCarrinho,
-  totalCarrinho, removerDoCarrinho,
-} from './state.js';
-import { criarPedidoAberto, upsertCliente, salvarConversa, fb } from './firebase.js';
+  criarPedidoAberto,
+  atualizarPedidoAberto,
+  buscarPedidoAbertoDoCliente,
+  upsertCliente,
+  salvarConversa,
+  getConfigLoja,
+  fb,
+} from './firebase.js';
 import { enviarImagem } from './evolution.js';
 
 // ── Declarações das tools (formato Gemini) ─────────────────────
@@ -34,7 +39,7 @@ export const TOOL_DECLARATIONS = [{
     },
     {
       name: 'adicionar_item',
-      description: 'Adiciona um item do cardápio ao pedido atual.',
+      description: 'Adiciona um item do cardápio ao pedido atual. Funciona com itens normais E com adicionais/extras (ex: bacon extra, ovo extra).',
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -47,7 +52,7 @@ export const TOOL_DECLARATIONS = [{
     },
     {
       name: 'remover_item',
-      description: 'Remove um item do pedido atual pelo nome.',
+      description: 'Remove um item do pedido atual pelo nome (remove a ocorrência mais recente com esse nome).',
       parameters: {
         type: 'OBJECT',
         properties: {
@@ -100,12 +105,17 @@ export const TOOL_DECLARATIONS = [{
     },
     {
       name: 'finalizar_pedido',
-      description: 'Finaliza o pedido e envia para a cozinha. Requer: itens no carrinho, nome, tipo, pagamento, e endereço (se delivery).',
+      description: 'Finaliza o pedido e envia para a cozinha. Requer: itens no carrinho, nome, tipo, pagamento, e endereço (se delivery). Se houver pedido aberto recente (alteração), o sistema ATUALIZA em vez de criar duplicado.',
       parameters: { type: 'OBJECT', properties: {} },
     },
     {
       name: 'cancelar_pedido',
-      description: 'Limpa o carrinho atual.',
+      description: 'Limpa o carrinho e dados parciais da sessão atual.',
+      parameters: { type: 'OBJECT', properties: {} },
+    },
+    {
+      name: 'carregar_pedido_recente',
+      description: 'Carrega no carrinho o último pedido do cliente (se ainda não aceito pelo PDV) para permitir ADICIONAR/REMOVER/ALTERAR itens. Use SEMPRE que o cliente quiser alterar um pedido que acabou de fazer. Depois de alterar, chame finalizar_pedido que o sistema ATUALIZA o pedido existente em vez de criar um novo.',
       parameters: { type: 'OBJECT', properties: {} },
     },
     {
@@ -122,16 +132,49 @@ export const TOOL_DECLARATIONS = [{
   ],
 }];
 
-// ── Executor ───────────────────────────────────────────────────
+const PAGAMENTOS_VALIDOS = ['pix', 'debito', 'credito', 'dinheiro'];
+const TIPOS_VALIDOS = ['salao', 'delivery', 'retirada'];
+const CATEGORIAS_VALIDAS = ['combos', 'burgers', 'porcoes', 'bebidas', 'extras'];
 
-export async function executarTool(telefone, nome, args) {
-  const carrinho = getCarrinho(telefone);
-  const dados = getDados(telefone);
+// ── Helpers ────────────────────────────────────────────────────
+
+function normalizarQuantidade(valor) {
+  const n = typeof valor === 'number' ? valor : parseInt(valor, 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(50, Math.floor(n));
+}
+
+// Taxa de entrega: prioriza config do Firebase, senão env
+async function taxaEntrega() {
+  try {
+    const cfg = await getConfigLoja();
+    if (cfg && typeof cfg.taxa_entrega === 'number') return cfg.taxa_entrega;
+  } catch {}
+  const env = parseFloat(config.restaurante.taxaEntrega);
+  return Number.isFinite(env) ? env : 5;
+}
+
+// ── Executor ───────────────────────────────────────────────────
+// O estado vem do processarMensagem; mutações ficam no objeto e são
+// persistidas no Firebase ao final do processamento da mensagem.
+
+export async function executarTool(telefone, nome, args, estado) {
+  if (!estado) {
+    // Defesa: se chamado sem estado, não quebra mas registra
+    console.error('executarTool chamado sem estado — ' + nome);
+    return { sucesso: false, erro: 'Estado indisponível' };
+  }
+  const carrinho = estado.carrinho;
+  const dados = estado.dados;
 
   switch (nome) {
     // ── Cardápio ─────────────────────────────────────────────
-    case 'ver_cardapio_categoria':
+    case 'ver_cardapio_categoria': {
+      if (!CATEGORIAS_VALIDAS.includes(args.categoria)) {
+        return { sucesso: false, erro: 'Categoria inválida. Use: ' + CATEGORIAS_VALIDAS.join(', ') };
+      }
       return await itensPorCategoria(args.categoria);
+    }
 
     case 'enviar_foto_cardapio': {
       try {
@@ -146,13 +189,16 @@ export async function executarTool(telefone, nome, args) {
 
     // ── Carrinho ─────────────────────────────────────────────
     case 'adicionar_item': {
-      const item = await buscarItem(args.nome_ou_id);
+      // Procura primeiro no cardápio principal, depois nos adicionais
+      let item = await buscarItem(args.nome_ou_id);
+      if (!item) item = await buscarAdicional(args.nome_ou_id);
       if (!item) return { sucesso: false, erro: `Item "${args.nome_ou_id}" não encontrado no cardápio.` };
 
-      const qtd = Math.max(1, parseInt(args.quantidade || 1));
+      const qtd = normalizarQuantidade(args.quantidade);
+      const obs = args.observacao ? String(args.observacao).slice(0, 200) : '';
       carrinho.push({
         id: item.id, nome: item.nome, preco: item.preco, qtd,
-        obs: args.observacao || '',
+        obs,
         subtotal: item.preco * qtd,
       });
       return {
@@ -160,20 +206,20 @@ export async function executarTool(telefone, nome, args) {
         adicionado: `${qtd}x ${item.nome}`,
         preco_unitario: item.preco,
         subtotal_item: item.preco * qtd,
-        carrinho_total: totalCarrinho(telefone),
+        carrinho_total: totalCarrinho(estado),
       };
     }
 
     case 'remover_item': {
-      const removido = removerDoCarrinho(telefone, args.nome);
+      const removido = removerDoCarrinho(estado, args.nome);
       if (!removido) return { sucesso: false, erro: 'Item não encontrado no carrinho' };
       return { sucesso: true, removido: removido.nome };
     }
 
     case 'ver_pedido_atual': {
       if (!carrinho.length) return { vazio: true };
-      const subtotal = totalCarrinho(telefone);
-      const taxa = dados.tipo === 'delivery' ? config.restaurante.taxaEntrega : 0;
+      const subtotal = totalCarrinho(estado);
+      const taxa = dados.tipo === 'delivery' ? await taxaEntrega() : 0;
       return {
         itens: carrinho.map(i => ({ qtd: i.qtd, nome: i.nome, preco: i.preco, obs: i.obs, subtotal: i.subtotal })),
         subtotal,
@@ -186,24 +232,28 @@ export async function executarTool(telefone, nome, args) {
           bairro: dados.bairro || '',
           pagamento: dados.pagamento || '',
         },
+        alteracao_pedido: !!estado.pedidoKeyExistente,
       };
     }
 
     // ── Cliente ──────────────────────────────────────────────
     case 'salvar_cliente': {
-      if (args.nome) dados.nome = args.nome;
-      if (args.endereco) dados.endereco = args.endereco;
-      if (args.bairro) dados.bairro = args.bairro;
-      if (args.referencia) dados.referencia = args.referencia;
+      if (args.nome) dados.nome = String(args.nome).slice(0, 80);
+      if (args.endereco) dados.endereco = String(args.endereco).slice(0, 200);
+      if (args.bairro) dados.bairro = String(args.bairro).slice(0, 80);
+      if (args.referencia) dados.referencia = String(args.referencia).slice(0, 200);
       return { sucesso: true, cliente: { ...dados } };
     }
 
     // ── Pedido ───────────────────────────────────────────────
     case 'definir_tipo_pedido': {
+      if (!TIPOS_VALIDOS.includes(args.tipo)) {
+        return { sucesso: false, erro: 'Tipo inválido. Use: salao, delivery ou retirada' };
+      }
       if (args.tipo === 'delivery') {
         try {
-          const cfg = (await fb.get('config')) || {};
-          if (cfg.entrega_ativa === false) {
+          const cfgLoja = await getConfigLoja();
+          if (cfgLoja && cfgLoja.entrega_ativa === false) {
             return { sucesso: false, erro: 'Entrega DESATIVADA hoje. Ofereça retirada ou salão.' };
           }
         } catch (e) {
@@ -215,39 +265,77 @@ export async function executarTool(telefone, nome, args) {
     }
 
     case 'definir_pagamento': {
+      if (!PAGAMENTOS_VALIDOS.includes(args.pagamento)) {
+        return { sucesso: false, erro: 'Pagamento inválido. Aceitos: pix, debito, credito, dinheiro' };
+      }
       dados.pagamento = args.pagamento;
-      if (args.troco) dados.troco = args.troco;
+      if (args.troco) dados.troco = String(args.troco).slice(0, 40);
       return { sucesso: true, pagamento: args.pagamento, troco: dados.troco || '' };
+    }
+
+    case 'carregar_pedido_recente': {
+      const p = await buscarPedidoAbertoDoCliente(telefone, 30);
+      if (!p) return { sucesso: false, erro: 'Nenhum pedido recente encontrado pra alterar' };
+      if (p.status && p.status !== 'aguardando') {
+        return { sucesso: false, erro: 'Pedido já está sendo preparado, não dá pra alterar mais. Transfira pra atendente.' };
+      }
+      estado.carrinho = Array.isArray(p.itens) ? p.itens.map(i => ({
+        id: i.id, nome: i.nome, preco: i.preco, qtd: i.qtd, obs: i.obs || '', subtotal: i.subtotal,
+      })) : [];
+      // Merge dados do cliente do pedido anterior nos dados atuais (sem sobrescrever)
+      if (p.cliente) {
+        if (p.cliente.nome && !dados.nome) dados.nome = p.cliente.nome;
+        if (p.cliente.endereco && !dados.endereco) dados.endereco = p.cliente.endereco;
+        if (p.cliente.bairro && !dados.bairro) dados.bairro = p.cliente.bairro;
+        if (p.cliente.referencia && !dados.referencia) dados.referencia = p.cliente.referencia;
+        if (p.cliente.localizacao && !dados.localizacao) dados.localizacao = p.cliente.localizacao;
+      }
+      if (p.tipo && !dados.tipo) dados.tipo = p.tipo;
+      if (p.pagamento && !dados.pagamento) dados.pagamento = p.pagamento;
+      if (p.troco && !dados.troco) dados.troco = p.troco;
+      estado.pedidoKeyExistente = p.key;
+      return {
+        sucesso: true,
+        itens_carregados: estado.carrinho.length,
+        total_atual: p.total || 0,
+        tipo: p.tipo || '',
+      };
     }
 
     case 'finalizar_pedido': {
       // Validações
       if (!carrinho.length) return { sucesso: false, erro: 'Carrinho vazio' };
+      // Fallback: usa pushName do WhatsApp se cliente não deu nome
+      if (!dados.nome && dados.nome_whatsapp) dados.nome = dados.nome_whatsapp;
       if (!dados.nome) return { sucesso: false, erro: 'Falta nome do cliente' };
       if (!dados.tipo) return { sucesso: false, erro: 'Falta tipo (salão/delivery/retirada)' };
-      if (dados.tipo === 'delivery' && !dados.endereco) return { sucesso: false, erro: 'Falta endereço para delivery' };
+      // Se tem localização GPS, endereço textual não é obrigatório
+      const temLocGps = dados.localizacao && dados.localizacao.lat && dados.localizacao.lng;
+      if (dados.tipo === 'delivery' && !dados.endereco && !temLocGps) {
+        return { sucesso: false, erro: 'Falta endereço para delivery (pode ser texto ou pin GPS)' };
+      }
       if (!dados.pagamento) return { sucesso: false, erro: 'Falta forma de pagamento' };
 
-      const subtotal = totalCarrinho(telefone);
-      const taxa = dados.tipo === 'delivery' ? config.restaurante.taxaEntrega : 0;
+      const subtotal = totalCarrinho(estado);
+      const taxa = dados.tipo === 'delivery' ? await taxaEntrega() : 0;
       const total = subtotal + taxa;
 
       // Salva cliente no Firebase
       try {
         await upsertCliente({
           nome: dados.nome,
-          telefone: dados.telefone,
+          telefone: dados.telefone || telefone,
           endereco: dados.endereco || '',
           bairro: dados.bairro || '',
           referencia: dados.referencia || '',
+          localizacao: dados.localizacao || null,
         });
       } catch (e) {
         console.warn('upsertCliente falhou:', e.message);
       }
 
-      // Link do Google Maps se tiver localização
       const loc = dados.localizacao || null;
-      const mapsLink = loc?.lat && loc?.lng
+      const mapsLink = loc && loc.lat && loc.lng
         ? `https://www.google.com/maps?q=${loc.lat},${loc.lng}`
         : '';
 
@@ -262,7 +350,7 @@ export async function executarTool(telefone, nome, args) {
         troco: dados.troco || '',
         cliente: {
           nome: dados.nome,
-          telefone: dados.telefone,
+          telefone: dados.telefone || telefone,
           endereco: dados.endereco || '',
           bairro: dados.bairro || '',
           referencia: dados.referencia || '',
@@ -272,8 +360,17 @@ export async function executarTool(telefone, nome, args) {
       };
 
       try {
-        const criado = await criarPedidoAberto(pedido);
-        limparEstado(telefone);
+        let criado;
+        let alterado = false;
+        if (estado.pedidoKeyExistente) {
+          // ALTERAÇÃO: atualiza o pedido existente em vez de criar novo
+          criado = await atualizarPedidoAberto(estado.pedidoKeyExistente, pedido);
+          alterado = true;
+        } else {
+          criado = await criarPedidoAberto(pedido);
+        }
+        // Marca pra limpar o estado ao final do processamento da msg
+        estado._limpar = true;
 
         // Link de rastreio para delivery
         const rastreioLink = dados.tipo === 'delivery' && config.publicUrl
@@ -284,21 +381,34 @@ export async function executarTool(telefone, nome, args) {
           sucesso: true,
           pedido_id: criado.key,
           total,
+          alterado,
           codigoConfirmacao: criado.codigoConfirmacao,
           rastreioLink,
-          instrucao_codigo: `Informe ao cliente o código de confirmação: ${criado.codigoConfirmacao}. O entregador vai pedir esse código na hora da entrega.${rastreioLink ? ` Link de rastreio: ${rastreioLink}` : ''}`,
+          instrucao_codigo: alterado
+            ? `Pedido ATUALIZADO. Informe ao cliente que as mudanças foram registradas. Código: ${criado.codigoConfirmacao}.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`
+            : `Informe ao cliente o código de confirmação: ${criado.codigoConfirmacao}. O entregador vai pedir esse código na entrega.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`,
         };
       } catch (e) {
         return { sucesso: false, erro: 'Falha ao salvar pedido: ' + e.message };
       }
     }
 
-    case 'cancelar_pedido':
-      limparCarrinho(telefone);
+    case 'cancelar_pedido': {
+      // Limpa tudo — antes só zerava o carrinho, mantendo nome/endereco/pagamento
+      // errados do cliente que cancelou porque a info tava errada.
+      estado.carrinho = [];
+      const manter = {
+        telefone: dados.telefone,
+        nome_whatsapp: dados.nome_whatsapp || '',
+        _carregouFirebase: dados._carregouFirebase,
+      };
+      estado.dados = manter;
+      estado.pedidoKeyExistente = null;
       return { sucesso: true };
+    }
 
     case 'transferir_humano': {
-      await salvarConversa(telefone, { status: 'pausado_humano', motivoTransferencia: args.motivo });
+      await salvarConversa(telefone, { status: 'pausado_humano', motivoTransferencia: args.motivo || '' });
       return { sucesso: true, mensagem: 'Conversa marcada para atendente humano' };
     }
 

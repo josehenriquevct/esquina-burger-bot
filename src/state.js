@@ -1,71 +1,87 @@
-// ── Gerenciamento de estado por cliente ─────────────────────────
-// Carrinho e dados do cliente em memória com fallback Firebase
-import { getCliente } from './firebase.js';
+// ── Estado por cliente (persistido no Firebase) ────────────────
+// Antes era Map em RAM — sumia a cada restart do Railway, cliente no
+// meio do pedido perdia o carrinho. Agora o estado carrega/salva do
+// Firebase a cada mensagem (bot_conversas/{tel}/estado).
+import {
+  getCliente,
+  getEstadoCliente,
+  salvarEstadoCliente,
+  limparEstadoCliente,
+} from './firebase.js';
 
-const carrinhos = new Map();
-const dadosClientes = new Map();
+function phoneKey(t) { return String(t || '').replace(/\D+/g, ''); }
 
-// ── Carrinho ───────────────────────────────────────────────────
-
-export function getCarrinho(telefone) {
-  if (!carrinhos.has(telefone)) carrinhos.set(telefone, []);
-  return carrinhos.get(telefone);
-}
-
-export function adicionarAoCarrinho(telefone, item) {
-  const carrinho = getCarrinho(telefone);
-  carrinho.push(item);
-  return carrinho;
-}
-
-export function removerDoCarrinho(telefone, nome) {
-  const carrinho = getCarrinho(telefone);
-  const idx = carrinho.findIndex(i => i.nome.toLowerCase().includes(String(nome).toLowerCase()));
-  if (idx === -1) return null;
-  return carrinho.splice(idx, 1)[0];
-}
-
-export function totalCarrinho(telefone) {
-  return getCarrinho(telefone).reduce((s, i) => s + i.subtotal, 0);
-}
-
-// ── Dados do cliente ───────────────────────────────────────────
-
-export function getDados(telefone) {
-  if (!dadosClientes.has(telefone)) dadosClientes.set(telefone, { telefone });
-  return dadosClientes.get(telefone);
-}
-
-// Carrega dados salvos do Firebase (cliente que já comprou antes)
-export async function carregarClienteFirebase(telefone) {
-  const dados = getDados(telefone);
-  if (dados._carregouFirebase) return dados;
-
+// Carrega o estado da sessão (carrinho + dados parciais). Sempre
+// retorna um objeto válido, mesmo se não existir ainda no Firebase.
+export async function carregarEstado(telefone) {
+  const tel = phoneKey(telefone);
   try {
-    const salvo = await getCliente(telefone);
+    const e = await getEstadoCliente(tel);
+    if (e && typeof e === 'object') {
+      return {
+        carrinho: Array.isArray(e.carrinho) ? e.carrinho : [],
+        dados: (e.dados && typeof e.dados === 'object') ? e.dados : { telefone: tel },
+        pedidoKeyExistente: e.pedidoKeyExistente || null,
+      };
+    }
+  } catch (err) {
+    console.warn('carregarEstado falhou:', err.message);
+  }
+  return { carrinho: [], dados: { telefone: tel }, pedidoKeyExistente: null };
+}
+
+export async function salvarEstado(telefone, estado) {
+  try {
+    await salvarEstadoCliente(phoneKey(telefone), estado);
+  } catch (err) {
+    console.warn('salvarEstado falhou:', err.message);
+  }
+}
+
+export async function limparEstado(telefone) {
+  try {
+    await limparEstadoCliente(phoneKey(telefone));
+  } catch (err) {
+    console.warn('limparEstado falhou:', err.message);
+  }
+}
+
+// Puxa dados de cliente recorrente do Firebase (se houver) pra dentro
+// do estado atual — só preenche campos que ainda estão vazios.
+export async function mergeClienteSalvo(estado) {
+  if (!estado || !estado.dados || estado.dados._carregouFirebase) return estado;
+  try {
+    const salvo = await getCliente(estado.dados.telefone);
     if (salvo) {
-      if (salvo.nome && !dados.nome) dados.nome = salvo.nome;
-      if (salvo.endereco && !dados.endereco) dados.endereco = salvo.endereco;
-      if (salvo.bairro && !dados.bairro) dados.bairro = salvo.bairro;
-      if (salvo.referencia && !dados.referencia) dados.referencia = salvo.referencia;
-      if (salvo.localizacao && !dados.localizacao) dados.localizacao = salvo.localizacao;
-      if (salvo.nome) console.log(`👤 Cliente reconhecido: ${salvo.nome} (${telefone})`);
+      if (salvo.nome && !estado.dados.nome) estado.dados.nome = salvo.nome;
+      if (salvo.endereco && !estado.dados.endereco) estado.dados.endereco = salvo.endereco;
+      if (salvo.bairro && !estado.dados.bairro) estado.dados.bairro = salvo.bairro;
+      if (salvo.referencia && !estado.dados.referencia) estado.dados.referencia = salvo.referencia;
+      if (salvo.localizacao && !estado.dados.localizacao) estado.dados.localizacao = salvo.localizacao;
+      if (salvo.nome) console.log(`👤 Cliente reconhecido: ${salvo.nome} (${estado.dados.telefone})`);
     }
   } catch (e) {
     console.warn('Erro ao buscar cliente salvo:', e.message);
   }
-
-  dados._carregouFirebase = true;
-  return dados;
+  estado.dados._carregouFirebase = true;
+  return estado;
 }
 
-// ── Limpar estado (após finalizar ou cancelar pedido) ──────────
-
-export function limparEstado(telefone) {
-  carrinhos.delete(telefone);
-  dadosClientes.delete(telefone);
+// Total do carrinho de um estado
+export function totalCarrinho(estado) {
+  if (!estado || !Array.isArray(estado.carrinho)) return 0;
+  return estado.carrinho.reduce((s, i) => s + (i.subtotal || 0), 0);
 }
 
-export function limparCarrinho(telefone) {
-  carrinhos.set(telefone, []);
+// Remove item do carrinho pelo nome (substring, do mais recente pro mais antigo)
+export function removerDoCarrinho(estado, nome) {
+  if (!estado || !Array.isArray(estado.carrinho)) return null;
+  const alvo = String(nome || '').toLowerCase();
+  if (!alvo) return null;
+  for (let i = estado.carrinho.length - 1; i >= 0; i--) {
+    if (estado.carrinho[i].nome.toLowerCase().includes(alvo)) {
+      return estado.carrinho.splice(i, 1)[0];
+    }
+  }
+  return null;
 }

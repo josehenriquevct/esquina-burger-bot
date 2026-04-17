@@ -92,6 +92,67 @@ export async function criarPedidoAberto(pedido) {
   return Object.assign({ key: key, codigoConfirmacao: codigoConfirmacao }, payload);
 }
 
+// Atualiza um pedido aberto existente (usado quando cliente altera pedido
+// antes do PDV aceitar). Preserva codigoConfirmacao e criadoEm.
+export async function atualizarPedidoAberto(key, pedido) {
+  var atual = (await fb.get('pedidos_abertos/' + key)) || {};
+  var payload = Object.assign({}, atual, pedido, {
+    alterado: true,
+    atualizadoEm: Date.now(),
+    codigoConfirmacao: atual.codigoConfirmacao || pedido.codigoConfirmacao,
+    criadoEm: atual.criadoEm || Date.now(),
+    status: atual.status || 'aguardando',
+  });
+  await fb.put('pedidos_abertos/' + key, payload);
+  return Object.assign({ key: key }, payload);
+}
+
+// Busca o pedido aberto mais recente do cliente ainda não aceito pelo PDV.
+// Usado pra detectar "alteração de pedido" — se cliente pede algo e ainda
+// tem pedido em status=aguardando de até N minutos atrás, atualiza em vez
+// de duplicar.
+export async function buscarPedidoAbertoDoCliente(telefone, minutosLimite) {
+  if (minutosLimite === undefined) minutosLimite = 30;
+  var key = phoneKey(telefone);
+  var todos = (await fb.get('pedidos_abertos')) || {};
+  var limite = Date.now() - minutosLimite * 60 * 1000;
+  var candidatos = Object.entries(todos).filter(function(entry) {
+    var p = entry[1];
+    if (!p || typeof p !== 'object') return false;
+    var telPedido = phoneKey(p && p.cliente && p.cliente.telefone || '');
+    if (telPedido !== key) return false;
+    if ((p.criadoEm || 0) < limite) return false;
+    if (p.status === 'cancelado' || p.status === 'entregue') return false;
+    return true;
+  }).sort(function(a, b) { return (b[1].criadoEm || 0) - (a[1].criadoEm || 0); });
+  if (!candidatos.length) return null;
+  return Object.assign({ key: candidatos[0][0] }, candidatos[0][1]);
+}
+
+// ── Estado da sessão do cliente (carrinho + dados parciais) ────
+// Persiste em bot_conversas/{tel}/estado. Antes ficava em Map em RAM
+// e sumia a cada restart do Railway — cliente no meio do pedido perdia tudo.
+export async function getEstadoCliente(telefone) {
+  var key = phoneKey(telefone);
+  return (await fb.get('bot_conversas/' + key + '/estado')) || null;
+}
+
+export async function salvarEstadoCliente(telefone, estado) {
+  var key = phoneKey(telefone);
+  var limpo = {
+    carrinho: Array.isArray(estado && estado.carrinho) ? estado.carrinho : [],
+    dados: (estado && estado.dados && typeof estado.dados === 'object') ? estado.dados : { telefone: key },
+    pedidoKeyExistente: (estado && estado.pedidoKeyExistente) || null,
+    atualizadoEm: Date.now(),
+  };
+  await fb.put('bot_conversas/' + key + '/estado', limpo);
+}
+
+export async function limparEstadoCliente(telefone) {
+  var key = phoneKey(telefone);
+  await fb.del('bot_conversas/' + key + '/estado');
+}
+
 // ── Clientes ───────────────────────────────────────────────────
 
 export async function getCliente(telefone) {

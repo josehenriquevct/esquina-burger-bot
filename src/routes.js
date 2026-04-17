@@ -27,6 +27,25 @@ function authMiddleware(req, res, next) {
   next();
 }
 
+// ── Dedupe de webhook por message.key.id ──────────────────────
+// Evolution API pode reenviar o mesmo evento (retry, reconexão) —
+// sem isso o bot processa duas vezes e duplica mensagens no histórico
+// / itens no carrinho.
+var webhooksVistos = new Map(); // id -> timestamp
+var WEBHOOK_TTL_MS = 10 * 60 * 1000;
+function webhookJaProcessado(id) {
+  if (!id) return false;
+  var agora = Date.now();
+  if (webhooksVistos.size > 1000) {
+    for (var entry of webhooksVistos) {
+      if (agora - entry[1] > WEBHOOK_TTL_MS) webhooksVistos.delete(entry[0]);
+    }
+  }
+  if (webhooksVistos.has(id)) return true;
+  webhooksVistos.set(id, agora);
+  return false;
+}
+
 // ── Fila de processamento por telefone (evita msgs simultaneas) ──
 
 var filaPorTelefone = new Map();
@@ -36,7 +55,7 @@ async function processarComFila(telefone, texto, pushName, imagemData) {
   var atual = anterior.then(async function() {
     try {
       await adicionarMensagem(telefone, { role: 'user', texto: texto, pushName: pushName });
-      mostrarDigitando(telefone, 2000).catch(function() {});
+      mostrarDigitando(telefone, 3500).catch(function() {});
       var resposta = await processarMensagem(telefone, texto, pushName, imagemData);
       if (!resposta) {
         console.log('Pausado para humano: ' + telefone);
@@ -46,10 +65,10 @@ async function processarComFila(telefone, texto, pushName, imagemData) {
       await adicionarMensagem(telefone, { role: 'assistant', texto: resposta });
     } catch (e) {
       console.error('Erro ' + telefone + ':', e);
+      var fallback = 'Ops, tive um probleminha. Pode tentar de novo? Se preferir, diga "atendente" que chamo alguem.';
       try {
-        await enviarMensagem(telefone,
-          'Ops, tive um probleminha. Pode tentar de novo? Se preferir, diga "atendente" que chamo alguem.'
-        );
+        await enviarMensagem(telefone, fallback);
+        await adicionarMensagem(telefone, { role: 'assistant', texto: fallback, erro: true });
       } catch (ignored) {}
     }
   });
@@ -107,10 +126,25 @@ router.get('/status', async function(req, res) {
 // ── Webhook principal (Evolution API) ─────────────────────────
 
 router.post('/webhook', async function(req, res) {
+  // Valida token do webhook ANTES de qualquer coisa. Se WEBHOOK_TOKEN
+  // estiver vazio, a função retorna true (compatibilidade), mas deve
+  // ser configurada em produção.
+  if (!verificarWebhookToken(req)) {
+    return res.status(401).json({ error: 'Webhook token inválido' });
+  }
   res.json({ ok: true });
 
   var evento = req.body && req.body.event;
   if (evento && evento !== 'messages.upsert' && evento !== 'MESSAGES_UPSERT') return;
+
+  // Dedupe por message.key.id — Evolution reenvia o mesmo webhook em
+  // caso de retry/reconexão, e sem isso duplicamos msgs e itens.
+  var rawId = (req.body && req.body.data && req.body.data.key && req.body.data.key.id)
+           || (req.body && req.body.key && req.body.key.id);
+  if (webhookJaProcessado(rawId)) {
+    console.log('Webhook duplicado ignorado: ' + rawId);
+    return;
+  }
 
   var msg = parseWebhook(req.body);
   if (!msg) return;
@@ -162,11 +196,27 @@ router.post('/webhook', async function(req, res) {
 
   console.log('Msg de ' + msg.telefone + ' (' + (msg.pushName || '?') + '): ' + msg.texto.slice(0, 80));
 
-  // Localizacao
+  // Sticker sozinha → não processa com Gemini, só confirma brevemente
+  if (msg.texto === '[figurinha]') {
+    enviarMensagem(msg.telefone, 'Recebi sua figurinha 😄 Se quiser fazer um pedido, é só me dizer!').catch(function() {});
+    return;
+  }
+
+  // Localizacao (pin GPS): salva no cliente e guarda como "localizacaoRecente"
+  // na conversa — o processarMensagem vai puxar pro estado. NÃO chama
+  // adicionarMensagem aqui (antes duplicava, porque processarComFila
+  // também salva a msg do cliente).
   if (msg.localizacao) {
     try {
-      await upsertCliente({ telefone: msg.telefone, endereco: 'Localizacao', localizacao: msg.localizacao });
-      await adicionarMensagem(msg.telefone, { role: 'user', texto: msg.texto, pushName: msg.pushName });
+      // Preserva o endereço textual que veio no pin (se houver)
+      var enderecoTexto = msg.localizacao.endereco || 'Localização (GPS)';
+      await upsertCliente({
+        telefone: msg.telefone,
+        endereco: enderecoTexto,
+        localizacao: msg.localizacao,
+      });
+      await salvarConversa(msg.telefone, { localizacaoRecente: msg.localizacao });
+      console.log('Localizacao recebida de ' + msg.telefone + ': ' + msg.localizacao.lat + ', ' + msg.localizacao.lng);
     } catch (e) {
       console.error('Erro localizacao:', e.message);
     }
@@ -278,6 +328,8 @@ router.post('/retomar', authMiddleware, async function(req, res) {
   }
 });
 
+// /send auto-pausa a IA: se o humano tá respondendo manualmente, a IA
+// não deve voltar a falar até o humano clicar "retomar" pelo PDV.
 router.post('/send', authMiddleware, async function(req, res) {
   var tel = phoneKey(req.body && req.body.telefone);
   var texto = sanitizarMensagem(req.body && req.body.texto);
@@ -285,7 +337,8 @@ router.post('/send', authMiddleware, async function(req, res) {
   try {
     await enviarMensagem(tel, texto);
     await adicionarMensagem(tel, { role: 'assistant', texto: texto, manual: true });
-    res.json({ ok: true });
+    await salvarConversa(tel, { status: 'pausado_humano' });
+    res.json({ ok: true, status: 'pausado_humano' });
   } catch (e) {
     res.status(500).json({ error: 'Erro interno' });
   }
