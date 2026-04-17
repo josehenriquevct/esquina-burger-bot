@@ -130,7 +130,7 @@ cardapio + '\n' +
 '   - PREVISAO DE TEMPO:\n' +
 '       retirada/balcao: "pronto em 5 a 10 min"\n' +
 '       salao: "pronto em 5 a 10 min"\n' +
-'       delivery: "sai pra entrega em 5 a 10 min" (soma o tempo de deslocamento)\n' +
+'       delivery: "chega em 30 a 40 min"\n' +
 '\n' +
 'CANCELAMENTO:\n' +
 '- Antes de finalizar: pode cancelar, use cancelar_pedido\n' +
