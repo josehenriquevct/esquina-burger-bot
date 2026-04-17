@@ -127,6 +127,10 @@ cardapio + '\n' +
 '   - Resumo curto numa mensagem so (itens, total, tipo, pagto, end se delivery) e "confirma?"\n' +
 '   - Cliente disse sim/beleza/isso/pode/certo = finalizar_pedido NA HORA, nenhuma pergunta extra\n' +
 '   - Depois de finalizar: codigo + previsao numa frase. Fim.\n' +
+'   - PREVISAO DE TEMPO:\n' +
+'       retirada/balcao: "pronto em 5 a 10 min"\n' +
+'       salao: "pronto em 5 a 10 min"\n' +
+'       delivery: "sai pra entrega em 5 a 10 min" (soma o tempo de deslocamento)\n' +
 '\n' +
 'CANCELAMENTO:\n' +
 '- Antes de finalizar: pode cancelar, use cancelar_pedido\n' +
