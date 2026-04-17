@@ -97,7 +97,7 @@ export const TOOL_DECLARATIONS = [{
       parameters: {
         type: 'OBJECT',
         properties: {
-          pagamento: { type: 'STRING', enum: ['pix', 'debito', 'credito', 'dinheiro'] },
+          pagamento: { type: 'STRING', enum: ['pix', 'cartao', 'dinheiro'] },
           troco: { type: 'STRING', description: 'Se dinheiro, valor para troco' },
         },
         required: ['pagamento'],
@@ -132,7 +132,7 @@ export const TOOL_DECLARATIONS = [{
   ],
 }];
 
-const PAGAMENTOS_VALIDOS = ['pix', 'debito', 'credito', 'dinheiro'];
+const PAGAMENTOS_VALIDOS = ['pix', 'cartao', 'dinheiro'];
 const TIPOS_VALIDOS = ['salao', 'delivery', 'retirada'];
 const CATEGORIAS_VALIDAS = ['combos', 'burgers', 'porcoes', 'bebidas', 'extras'];
 
@@ -266,7 +266,7 @@ export async function executarTool(telefone, nome, args, estado) {
 
     case 'definir_pagamento': {
       if (!PAGAMENTOS_VALIDOS.includes(args.pagamento)) {
-        return { sucesso: false, erro: 'Pagamento inválido. Aceitos: pix, debito, credito, dinheiro' };
+        return { sucesso: false, erro: 'Pagamento inválido. Aceitos: pix, cartao, dinheiro' };
       }
       dados.pagamento = args.pagamento;
       if (args.troco) dados.troco = String(args.troco).slice(0, 40);
