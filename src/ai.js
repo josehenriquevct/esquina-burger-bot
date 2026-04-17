@@ -157,7 +157,7 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     systemInstruction: sysPrompt,
     generationConfig: {
       temperature: 0.7,
-      maxOutputTokens: 400,
+      maxOutputTokens: 600,
     },
   });
 
@@ -173,6 +173,7 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
   }
 
   // Loop de tool use (ate 8 iteracoes)
+  var ultimaToolUsada = '';
   for (var j = 0; j < 8; j++) {
     var response = result.response;
     var calls = (typeof response.functionCalls === 'function') ? response.functionCalls() : null;
@@ -181,18 +182,26 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
       await persistir();
       try {
         var txt = response.text();
-        return (txt && txt.trim()) ? txt.trim() : 'Desculpe, nao consegui entender. Pode repetir?';
+        if (txt && txt.trim()) return txt.trim();
+        // Texto vazio — tenta algo útil baseado na última tool usada
+        console.error('Gemini retornou texto vazio. Ultima tool:', ultimaToolUsada, 'FinishReason:', response.candidates?.[0]?.finishReason);
+        if (ultimaToolUsada === 'enviar_foto_cardapio') return 'Mandei o cardápio! Me diz o que você quer pedir 🍔';
+        if (ultimaToolUsada === 'finalizar_pedido') return 'Prontinho, pedido na cozinha!';
+        return 'Pode repetir, por favor?';
       } catch (e2) {
-        return 'Desculpe, nao consegui entender. Pode repetir?';
+        console.error('Erro ao extrair texto do Gemini:', e2.message);
+        return 'Pode repetir, por favor?';
       }
     }
 
     var functionResponses = [];
     for (var k = 0; k < calls.length; k++) {
+      ultimaToolUsada = calls[k].name;
       try {
         var r = await executarTool(telefone, calls[k].name, calls[k].args || {}, estado);
         functionResponses.push({ functionResponse: { name: calls[k].name, response: r } });
       } catch (e3) {
+        console.error('Erro na tool ' + calls[k].name + ':', e3.message);
         functionResponses.push({ functionResponse: { name: calls[k].name, response: { erro: e3.message } } });
       }
     }
@@ -200,9 +209,12 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     try {
       result = await comTimeout(chat.sendMessage(functionResponses), GEMINI_TIMEOUT_MS, 'gemini-timeout');
     } catch (e4) {
-      console.error('Gemini follow-up erro:', e4.message);
+      console.error('Gemini follow-up erro (apos ' + ultimaToolUsada + '):', e4.message);
       await persistir();
-      return 'Desculpe, tive um problema aqui. Pode tentar de novo?';
+      // Se a última tool foi sucesso, dá uma resposta adequada em vez de "tive problema"
+      if (ultimaToolUsada === 'enviar_foto_cardapio') return 'Mandei o cardápio! O que vai querer? 🍔';
+      if (ultimaToolUsada === 'finalizar_pedido') return 'Pedido enviado pra cozinha!';
+      return 'Tive um problema aqui, pode tentar de novo?';
     }
   }
 
