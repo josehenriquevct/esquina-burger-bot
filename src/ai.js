@@ -3,11 +3,24 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { config } from './config.js';
 import { systemPrompt, promptInterno } from './prompts.js';
 import { TOOL_DECLARATIONS, executarTool } from './tools.js';
-import { getDados, carregarClienteFirebase } from './state.js';
+import { carregarEstado, salvarEstado, limparEstado, mergeClienteSalvo } from './state.js';
 import { getConversa, getConfigLoja } from './firebase.js';
 
 var genAI = new GoogleGenerativeAI(config.gemini.apiKey);
 var MODELO = config.gemini.model;
+var GEMINI_TIMEOUT_MS = parseInt(process.env.GEMINI_TIMEOUT_MS || '25000', 10);
+
+// Promise.race com timeout — evita Gemini pendurado travar a fila
+function comTimeout(promise, ms, mensagemErro) {
+  if (!mensagemErro) mensagemErro = 'timeout';
+  return new Promise(function(resolve, reject) {
+    var t = setTimeout(function() { reject(new Error(mensagemErro)); }, ms);
+    promise.then(
+      function(v) { clearTimeout(t); resolve(v); },
+      function(e) { clearTimeout(t); reject(e); }
+    );
+  });
+}
 
 // ── Transcricao de audio via Gemini ────────────────────────────
 
@@ -62,20 +75,27 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
   var conversaAtual = await getConversa(telefone).catch(function() { return null; });
   if (conversaAtual && conversaAtual.status === 'pausado_humano') return null;
 
-  // Carrega dados do cliente (memoria + Firebase)
-  var dados = await carregarClienteFirebase(telefone);
-  if (pushName && !dados.nome_whatsapp) dados.nome_whatsapp = pushName;
+  // Carrega estado persistido (carrinho + dados parciais) + cliente salvo
+  var estado = await carregarEstado(telefone);
+  estado.dados.telefone = telefone;
+  if (pushName && !estado.dados.nome_whatsapp) estado.dados.nome_whatsapp = pushName;
+  await mergeClienteSalvo(estado);
 
-  // Config da loja (entrega_ativa, etc.)
+  // Se a conversa recebeu localização recentemente via WhatsApp, joga no estado
+  if (conversaAtual && conversaAtual.localizacaoRecente && !estado.dados.localizacao) {
+    estado.dados.localizacao = conversaAtual.localizacaoRecente;
+  }
+
+  // Config da loja (entrega_ativa, horario, etc.)
   var configLoja = await getConfigLoja();
 
   // Passa dados salvos do cliente pro prompt
-  var loc = dados.localizacao || null;
+  var loc = estado.dados.localizacao || null;
   configLoja.cliente_salvo = {
-    nome: dados.nome || '',
-    endereco: dados.endereco || '',
-    bairro: dados.bairro || '',
-    referencia: dados.referencia || '',
+    nome: estado.dados.nome || '',
+    endereco: estado.dados.endereco || '',
+    bairro: estado.dados.bairro || '',
+    referencia: estado.dados.referencia || '',
     temLocalizacao: !!(loc && loc.lat && loc.lng),
   };
 
@@ -105,10 +125,29 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
       history.push({ role: role, parts: [{ text: text }] });
     }
   }
+  // Remove a última msg de user se for igual ao texto atual — evita duplicar
+  // a mensagem do cliente no contexto do Gemini (ela é salva antes de processar).
+  while (
+    history.length > 0 &&
+    history[history.length - 1].role === 'user' &&
+    (history[history.length - 1].parts[0].text === texto ||
+     history[history.length - 1].parts[0].text.endsWith(texto))
+  ) {
+    history.pop();
+  }
   // Gemini requires first message to be 'user'
   while (history.length > 0 && history[0].role !== 'user') {
     history.shift();
   }
+
+  // Função helper: persiste ou limpa o estado ao sair do processamento
+  var persistir = async function() {
+    if (estado._limpar) {
+      await limparEstado(telefone);
+    } else {
+      await salvarEstado(telefone, estado);
+    }
+  };
 
   // Inicializa chat com Gemini
   var sysPrompt = await systemPrompt(configLoja);
@@ -126,9 +165,10 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
 
   var result;
   try {
-    result = await chat.sendMessage(texto);
+    result = await comTimeout(chat.sendMessage(texto), GEMINI_TIMEOUT_MS, 'gemini-timeout');
   } catch (e) {
     console.error('Gemini sendMessage erro:', e.message);
+    await salvarEstado(telefone, estado);
     return 'Desculpe, tive um problema aqui. Pode repetir?';
   }
 
@@ -138,6 +178,7 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     var calls = (typeof response.functionCalls === 'function') ? response.functionCalls() : null;
 
     if (!calls || calls.length === 0) {
+      await persistir();
       try {
         var txt = response.text();
         return (txt && txt.trim()) ? txt.trim() : 'Desculpe, nao consegui entender. Pode repetir?';
@@ -149,7 +190,7 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     var functionResponses = [];
     for (var k = 0; k < calls.length; k++) {
       try {
-        var r = await executarTool(telefone, calls[k].name, calls[k].args || {});
+        var r = await executarTool(telefone, calls[k].name, calls[k].args || {}, estado);
         functionResponses.push({ functionResponse: { name: calls[k].name, response: r } });
       } catch (e3) {
         functionResponses.push({ functionResponse: { name: calls[k].name, response: { erro: e3.message } } });
@@ -157,13 +198,15 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     }
 
     try {
-      result = await chat.sendMessage(functionResponses);
+      result = await comTimeout(chat.sendMessage(functionResponses), GEMINI_TIMEOUT_MS, 'gemini-timeout');
     } catch (e4) {
       console.error('Gemini follow-up erro:', e4.message);
+      await persistir();
       return 'Desculpe, tive um problema aqui. Pode tentar de novo?';
     }
   }
 
+  await persistir();
   try {
     return result.response.text() || 'Desculpe, tive um problema. Pode repetir?';
   } catch (e5) {
@@ -175,6 +218,9 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
 
 export async function processarPedidoInterno(telefone, texto) {
   console.log('PEDIDO INTERNO de ' + telefone + ': ' + texto.slice(0, 100));
+
+  // Pedido interno começa sempre com estado limpo — cada áudio é um pedido novo
+  var estado = { carrinho: [], dados: { telefone: telefone }, pedidoKeyExistente: null };
 
   var sysPrompt = await promptInterno();
   var model = genAI.getGenerativeModel({
@@ -192,7 +238,7 @@ export async function processarPedidoInterno(telefone, texto) {
 
   var result;
   try {
-    result = await chat.sendMessage(texto);
+    result = await comTimeout(chat.sendMessage(texto), GEMINI_TIMEOUT_MS, 'gemini-timeout');
   } catch (e) {
     console.error('Gemini pedido interno erro:', e.message);
     return 'Nao entendi o pedido. Pode repetir?';
@@ -215,7 +261,7 @@ export async function processarPedidoInterno(telefone, texto) {
     var functionResponses = [];
     for (var k = 0; k < calls.length; k++) {
       try {
-        var r = await executarTool(telefone, calls[k].name, calls[k].args || {});
+        var r = await executarTool(telefone, calls[k].name, calls[k].args || {}, estado);
         functionResponses.push({ functionResponse: { name: calls[k].name, response: r } });
       } catch (e3) {
         functionResponses.push({ functionResponse: { name: calls[k].name, response: { erro: e3.message } } });
@@ -223,7 +269,7 @@ export async function processarPedidoInterno(telefone, texto) {
     }
 
     try {
-      result = await chat.sendMessage(functionResponses);
+      result = await comTimeout(chat.sendMessage(functionResponses), GEMINI_TIMEOUT_MS, 'gemini-timeout');
     } catch (e4) {
       console.error('Gemini interno follow-up erro:', e4.message);
       return 'Erro ao registrar pedido. Tenta de novo?';

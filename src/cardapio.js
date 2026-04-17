@@ -28,25 +28,95 @@ async function carregarCardapio() {
   }
 }
 
+// Normaliza: remove acento, caixa baixa, troca hífen por espaço, tira "NN - "
+function normalizar(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/-/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Raiz simples pra plural básico (fritas -> frita, cocas -> coca)
+function raiz(w) {
+  if (w.length > 3 && w.endsWith('s')) return w.slice(0, -1);
+  return w;
+}
+
+// Scoring: conta palavras da query que aparecem em nome/compacto/desc.
+// Peso maior pro nome. Desempate: menos palavras no nome (= mais específico).
+function encontrarMelhorMatch(lista, qNorm) {
+  const palavras = qNorm.split(' ').filter(w => w.length >= 2).map(raiz);
+  if (!palavras.length) return null;
+
+  const scored = lista.map(i => {
+    const nomeN = normalizar(i.nome);
+    const nomeCompacto = nomeN.replace(/\s+/g, '');
+    const descN = normalizar(i.desc || '');
+    let score = 0;
+    let matches = 0;
+    for (const w of palavras) {
+      if (nomeN.includes(w)) { score += 3; matches++; }
+      else if (nomeCompacto.includes(w)) { score += 2; matches++; }
+      else if (descN.includes(w)) { score += 1; matches++; }
+    }
+    return { item: i, score, matches, len: nomeN.length };
+  }).filter(s => s.score > 0);
+
+  if (!scored.length) return null;
+  scored.sort((a, b) => b.score - a.score || b.matches - a.matches || a.len - b.len);
+  return scored[0].item;
+}
+
 export async function buscarItem(query) {
   await carregarCardapio();
   if (!query) return null;
-  const q = String(query).toLowerCase().trim();
-  return CARDAPIO.find(i => String(i.id) === q)
-    || CARDAPIO.find(i => i.nome.toLowerCase() === q)
-    || CARDAPIO.find(i => i.nome.toLowerCase().includes(q))
-    || CARDAPIO.find(i => {
-         const n = i.nome.toLowerCase().replace(/^\d+\s*-\s*/, '');
-         return n.includes(q) || q.includes(n.split(' ')[0]);
-       })
-    || null;
+  const raw = String(query).toLowerCase().trim();
+
+  // 1. Se a query é só um número, prioriza código visual do menu
+  //    ("04 - Duplo Blade" → cliente diz "quero o 4"). Depois id interno.
+  if (/^\d+$/.test(raw)) {
+    const cleanQ = raw.replace(/^0+/, '') || '0';
+    const porCodigo = CARDAPIO.find(i => {
+      const m = /^(\d+)\s*-/.exec(i.nome);
+      if (!m) return false;
+      const cod = m[1].replace(/^0+/, '') || '0';
+      return cod === cleanQ;
+    });
+    if (porCodigo) return porCodigo;
+    const porId = CARDAPIO.find(i => String(i.id) === raw);
+    if (porId) return porId;
+  }
+
+  // 2. Nome exato (ignorando acento/caixa/hífen)
+  const qNorm = normalizar(raw);
+  if (!qNorm) return null;
+  const exato = CARDAPIO.find(i => normalizar(i.nome) === qNorm);
+  if (exato) return exato;
+
+  // 3. Scoring por palavras
+  return encontrarMelhorMatch(CARDAPIO, qNorm);
 }
 
 export async function buscarAdicional(query) {
   await carregarCardapio();
   if (!query) return null;
-  const q = String(query).toLowerCase().trim();
-  return ADICIONAIS.find(a => a.nome.toLowerCase().includes(q)) || null;
+  const raw = String(query).toLowerCase().trim();
+  if (!ADICIONAIS.length) return null;
+
+  // ID exato
+  const porId = ADICIONAIS.find(a => String(a.id) === raw);
+  if (porId) return porId;
+
+  // Nome exato normalizado
+  const qNorm = normalizar(raw);
+  if (!qNorm) return null;
+  const exato = ADICIONAIS.find(a => normalizar(a.nome) === qNorm);
+  if (exato) return exato;
+
+  // Scoring
+  return encontrarMelhorMatch(ADICIONAIS, qNorm);
 }
 
 export async function itensPorCategoria(categoria) {
@@ -67,14 +137,14 @@ export async function cardapioResumo() {
     if (!cats[k].length) continue;
     txt += '\n== ' + (LABELS[k] || k) + ' ==\n';
     cats[k].forEach(i => {
-      txt += '[' + i.id + '] ' + i.nome + ' — R$ ' + i.preco.toFixed(2).replace('.', ',') + '\n';
+      txt += '• ' + i.nome + ' — R$ ' + i.preco.toFixed(2).replace('.', ',') + '\n';
       if (i.desc) txt += '    ' + i.desc + '\n';
     });
   }
   if (ADICIONAIS.length) {
     txt += '\n== ADICIONAIS / MONTE O SEU ==\n';
     ADICIONAIS.forEach(a => {
-      txt += '[' + a.id + '] ' + a.nome + ' — R$ ' + a.preco.toFixed(2).replace('.', ',') + '\n';
+      txt += '• ' + a.nome + ' — R$ ' + a.preco.toFixed(2).replace('.', ',') + '\n';
     });
   }
   return txt.trim();
