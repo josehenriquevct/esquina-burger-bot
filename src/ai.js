@@ -157,7 +157,7 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     systemInstruction: sysPrompt,
     generationConfig: {
       temperature: 0.7,
-      maxOutputTokens: 600,
+      maxOutputTokens: 800,
     },
   });
 
@@ -187,6 +187,17 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
         console.error('Gemini retornou texto vazio. Ultima tool:', ultimaToolUsada, 'FinishReason:', response.candidates?.[0]?.finishReason);
         if (ultimaToolUsada === 'enviar_foto_cardapio') return 'Mandei o cardápio! Me diz o que você quer pedir 🍔';
         if (ultimaToolUsada === 'finalizar_pedido') return 'Prontinho, pedido na cozinha!';
+        // Fallback: cliente pediu cardápio e Gemini travou — manda a foto direto
+        var textoLower = String(texto || '').toLowerCase();
+        if (/card[áa]pio|menu|\bver\b.*comida|\bo que\b.*tem/.test(textoLower)) {
+          console.log('Fallback cardápio: chamando enviar_foto_cardapio diretamente');
+          try {
+            await executarTool(telefone, 'enviar_foto_cardapio', {}, estado);
+            return 'Mandei o cardápio! 🍔 Me diz o que você quer pedir';
+          } catch (efb) {
+            console.error('Fallback enviar_foto_cardapio falhou:', efb.message);
+          }
+        }
         return 'Pode repetir, por favor?';
       } catch (e2) {
         console.error('Erro ao extrair texto do Gemini:', e2.message);

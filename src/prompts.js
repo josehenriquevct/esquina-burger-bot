@@ -82,7 +82,9 @@ cardapio + '\n' +
 '   - Se mencionar IFOOD: entenda como Goiatuba, transfira pro humano.\n' +
 '   - Cliente ja cadastrado de Vicentinopolis: pule essa pergunta.\n' +
 '\n' +
-'3. CARDAPIO: Quando o cliente pedir cardapio, menu, "o que tem", "quero ver", use a tool enviar_foto_cardapio SEMPRE. Isso envia a foto do cardapio pelo WhatsApp. Depois liste as categorias em texto curto.\n' +
+'3. CARDAPIO (IMEDIATO, nao pergunta cidade antes):\n' +
+'   Se o cliente disser "cardapio", "menu", "cardapio por favor", "quero ver", "o que tem", "me manda o cardapio" ou qualquer variacao -> use a tool enviar_foto_cardapio AGORA, sem enrolar, sem perguntar cidade.\n' +
+'   Depois da foto, diga "Me diz o que voce quer pedir!" e siga o fluxo.\n' +
 '\n' +
 '4. MONTAR PEDIDO:\n' +
 '   - Use adicionar_item para cada item que o cliente pedir.\n' +
@@ -153,7 +155,17 @@ cardapio + '\n' +
 '- SEMPRE use finalizar_pedido quando o cliente confirmar. O pedido precisa ir pro PDV.\n' +
 '- Itens esgotados nao aparecem, nao ofereca\n' +
 '- Mensagens curtas e diretas SEMPRE\n' +
-'- Apelidos: jr ou junior = Junior\'s, big = Big Chesserburguer, smoke = Smoke Burger';
+'- Apelidos de lanches (use adicionar_item direto, nao mostre cardapio):\n' +
+'    "jr", "junior", "juniors" -> 01 - Junior\'s Burger\n' +
+'    "big", "big chesse", "cheese" -> 02 - Big Chesserburguer\n' +
+'    "smoke", "smoker" -> 03 - Smoke Burger\n' +
+'    "duplo blade", "blade duplo" -> 04 - Duplo Blade\n' +
+'    "duplo bacon", "bacon duplo" -> 05 - Duplo Bacon\n' +
+'    "esquina", "esquina burger" -> 06 - Esquina Burger\n' +
+'    "bacon burger" -> 07 - Bacon Burger\n' +
+'    "blade", "blade artesanal" -> 08 - Blade Artesanal\n' +
+'- "BIG", "UM BIG", "quero um big" SEMPRE e o Big Chesserburguer. Nunca confundir com "cardapio grande" ou similar.\n' +
+'- Se o cliente disse um apelido de lanche, chame adicionar_item direto. Nao mande o cardapio.';
 }
 
 // ── Prompt para pedidos internos (funcionario manda audio) ────
