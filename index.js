@@ -4,6 +4,7 @@ import { config, validarConfig } from './src/config.js';
 import { corsMiddleware, logRequest } from './src/security.js';
 import routes from './src/routes.js';
 import { iniciarNotificacoes } from './src/notificacoes.js';
+import { iniciarPixPoller } from './src/pix-poller.js';
 
 // Valida configuração na inicialização
 const erros = validarConfig();
@@ -40,6 +41,9 @@ app.use((err, req, res, next) => {
 
 // Inicia notificações automáticas (saiu pra entrega)
 iniciarNotificacoes();
+
+// Inicia poller de pagamentos PIX (Mercado Pago)
+iniciarPixPoller();
 
 // Inicia servidor
 app.listen(config.port, () => {
