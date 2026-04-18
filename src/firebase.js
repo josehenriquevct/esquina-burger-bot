@@ -221,6 +221,7 @@ export async function getConfigLoja() {
       tipo_chave_pix: botCfg.tipoChavePix || '',
       nome_recebedor: botCfg.nomeRecebedor || '',
       menu_image_url: botCfg.menuImageUrl || '',
+      menu_image_url2: botCfg.menuImageUrl2 || '',
     };
   } catch (e) {
     console.warn('Erro ao ler config da loja:', e.message);

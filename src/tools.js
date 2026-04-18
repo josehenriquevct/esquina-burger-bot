@@ -179,11 +179,22 @@ export async function executarTool(telefone, nome, args, estado) {
 
     case 'enviar_foto_cardapio': {
       try {
-        await enviarImagem(telefone, config.cardapioImgUrl, 'Nosso cardápio! 🍔 Me diz o que você quer pedir');
-        console.log(`🖼 Foto do cardápio enviada para ${telefone}`);
+        // Prioriza URLs do Firebase (bot_config/bot.menuImageUrl/menuImageUrl2).
+        // Se não houver, cai no CARDAPIO_IMG_URL da env var.
+        const cfgLoja = await getConfigLoja();
+        const urls = [
+          cfgLoja && cfgLoja.menu_image_url,
+          cfgLoja && cfgLoja.menu_image_url2,
+        ].filter(u => u && typeof u === 'string');
+        const envio = urls.length ? urls : [config.cardapioImgUrl];
+        for (let i = 0; i < envio.length; i++) {
+          const cap = i === 0 ? 'Nosso cardápio! 🍔 Me diz o que você quer pedir' : '';
+          await enviarImagem(telefone, envio[i], cap);
+        }
+        console.log(`🖼 ${envio.length} foto(s) do cardápio enviada(s) para ${telefone}`);
         return {
           sucesso: true,
-          instrucao: 'Foto enviada com legenda "Me diz o que você quer pedir". NAO mande mais nenhuma mensagem de texto, o cliente ja viu a foto e a legenda. Retorne uma resposta vazia.',
+          instrucao: 'Foto(s) enviada(s). NAO mande mais nenhuma mensagem de texto, o cliente ja viu. Retorne uma resposta vazia.',
         };
       } catch (e) {
         console.error('Erro ao enviar foto do cardápio:', e.message);
