@@ -179,12 +179,34 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     var calls = (typeof response.functionCalls === 'function') ? response.functionCalls() : null;
 
     if (!calls || calls.length === 0) {
-      await persistir();
+      var finishReason = response.candidates?.[0]?.finishReason;
       try {
         var txt = response.text();
-        if (txt && txt.trim()) return txt.trim();
-        // Texto vazio — tenta algo útil baseado na última tool usada
-        console.error('Gemini retornou texto vazio. Ultima tool:', ultimaToolUsada, 'FinishReason:', response.candidates?.[0]?.finishReason);
+        if (txt && txt.trim()) {
+          await persistir();
+          return txt.trim();
+        }
+        // Texto vazio
+        console.error('Gemini retornou texto vazio. Ultima tool:', ultimaToolUsada, 'FinishReason:', finishReason);
+
+        // MALFORMED_FUNCTION_CALL: Gemini tentou chamar tool com args inválidos.
+        // Retry UMA vez pedindo resposta de texto direta (funciona na maioria dos casos).
+        if (finishReason === 'MALFORMED_FUNCTION_CALL' && !estado._retryMalformed) {
+          estado._retryMalformed = true;
+          console.log('Retry apos MALFORMED_FUNCTION_CALL');
+          try {
+            result = await comTimeout(
+              chat.sendMessage('Responda ao cliente com uma mensagem de texto curta, sem chamar funcao.'),
+              GEMINI_TIMEOUT_MS,
+              'gemini-timeout-retry'
+            );
+            continue;
+          } catch (eRetry) {
+            console.error('Retry malformed falhou:', eRetry.message);
+          }
+        }
+
+        await persistir();
         // Cardápio já tem legenda auto-suficiente — não envia texto extra
         if (ultimaToolUsada === 'enviar_foto_cardapio') return '';
         if (ultimaToolUsada === 'finalizar_pedido') return 'Prontinho, pedido na cozinha!';
@@ -202,6 +224,7 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
         return 'Pode repetir, por favor?';
       } catch (e2) {
         console.error('Erro ao extrair texto do Gemini:', e2.message);
+        await persistir();
         return 'Pode repetir, por favor?';
       }
     }
