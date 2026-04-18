@@ -190,16 +190,19 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
         console.error('Gemini retornou texto vazio. Ultima tool:', ultimaToolUsada, 'FinishReason:', finishReason);
 
         // MALFORMED_FUNCTION_CALL: Gemini tentou chamar tool com args inválidos.
-        // Retry UMA vez pedindo resposta de texto direta (funciona na maioria dos casos).
+        // Recria o chat SEM a tentativa quebrada e reenvia o texto original do
+        // cliente — retry silencioso, sem vazar instrução técnica na conversa.
         if (finishReason === 'MALFORMED_FUNCTION_CALL' && !estado._retryMalformed) {
           estado._retryMalformed = true;
-          console.log('Retry apos MALFORMED_FUNCTION_CALL');
+          console.log('Retry silencioso apos MALFORMED_FUNCTION_CALL');
           try {
+            var chatRetry = model.startChat({ history: history });
             result = await comTimeout(
-              chat.sendMessage('Responda ao cliente com uma mensagem de texto curta, sem chamar funcao.'),
+              chatRetry.sendMessage(texto),
               GEMINI_TIMEOUT_MS,
               'gemini-timeout-retry'
             );
+            chat = chatRetry; // troca pro chat limpo pra próximas iterações
             continue;
           } catch (eRetry) {
             console.error('Retry malformed falhou:', eRetry.message);
