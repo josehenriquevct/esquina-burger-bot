@@ -57,8 +57,14 @@ async function processarComFila(telefone, texto, pushName, imagemData) {
       await adicionarMensagem(telefone, { role: 'user', texto: texto, pushName: pushName });
       mostrarDigitando(telefone, 3500).catch(function() {});
       var resposta = await processarMensagem(telefone, texto, pushName, imagemData);
-      if (!resposta) {
+      if (resposta === null) {
         console.log('Pausado para humano: ' + telefone);
+        return;
+      }
+      if (!resposta) {
+        // Resposta vazia intencional — uma tool (ex: enviar_foto_cardapio) ja
+        // cobriu tudo que o cliente precisava. Nao envia texto extra.
+        console.log('Sem follow-up de texto — tool cobriu a resposta');
         return;
       }
       await enviarMensagem(telefone, resposta);

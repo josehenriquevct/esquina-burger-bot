@@ -84,7 +84,7 @@ cardapio + '\n' +
 '\n' +
 '3. CARDAPIO (IMEDIATO, nao pergunta cidade antes):\n' +
 '   Se o cliente disser "cardapio", "menu", "cardapio por favor", "quero ver", "o que tem", "me manda o cardapio" ou qualquer variacao -> use a tool enviar_foto_cardapio AGORA, sem enrolar, sem perguntar cidade.\n' +
-'   Depois da foto, diga "Me diz o que voce quer pedir!" e siga o fluxo.\n' +
+'   Depois de chamar a tool, NAO mande mais nenhuma mensagem de texto. A foto ja foi enviada com a legenda "Me diz o que você quer pedir". Retorne resposta vazia.\n' +
 '\n' +
 '4. MONTAR PEDIDO:\n' +
 '   - Use adicionar_item para cada item que o cliente pedir.\n' +

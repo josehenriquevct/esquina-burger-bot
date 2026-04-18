@@ -178,9 +178,12 @@ export async function executarTool(telefone, nome, args, estado) {
 
     case 'enviar_foto_cardapio': {
       try {
-        await enviarImagem(telefone, config.cardapioImgUrl, 'Nosso cardápio completo! 🍔🔥');
+        await enviarImagem(telefone, config.cardapioImgUrl, 'Nosso cardápio! 🍔 Me diz o que você quer pedir');
         console.log(`🖼 Foto do cardápio enviada para ${telefone}`);
-        return { sucesso: true, mensagem: 'Foto do cardápio enviada com sucesso' };
+        return {
+          sucesso: true,
+          instrucao: 'Foto enviada com legenda "Me diz o que você quer pedir". NAO mande mais nenhuma mensagem de texto, o cliente ja viu a foto e a legenda. Retorne uma resposta vazia.',
+        };
       } catch (e) {
         console.error('Erro ao enviar foto do cardápio:', e.message);
         return { sucesso: false, erro: 'Não consegui enviar a foto, mas posso listar os itens em texto' };

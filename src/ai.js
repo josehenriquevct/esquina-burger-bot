@@ -185,7 +185,8 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
         if (txt && txt.trim()) return txt.trim();
         // Texto vazio — tenta algo útil baseado na última tool usada
         console.error('Gemini retornou texto vazio. Ultima tool:', ultimaToolUsada, 'FinishReason:', response.candidates?.[0]?.finishReason);
-        if (ultimaToolUsada === 'enviar_foto_cardapio') return 'Mandei o cardápio! Me diz o que você quer pedir 🍔';
+        // Cardápio já tem legenda auto-suficiente — não envia texto extra
+        if (ultimaToolUsada === 'enviar_foto_cardapio') return '';
         if (ultimaToolUsada === 'finalizar_pedido') return 'Prontinho, pedido na cozinha!';
         // Fallback: cliente pediu cardápio e Gemini travou — manda a foto direto
         var textoLower = String(texto || '').toLowerCase();
@@ -193,7 +194,7 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
           console.log('Fallback cardápio: chamando enviar_foto_cardapio diretamente');
           try {
             await executarTool(telefone, 'enviar_foto_cardapio', {}, estado);
-            return 'Mandei o cardápio! 🍔 Me diz o que você quer pedir';
+            return ''; // legenda da foto já tem "Me diz o que você quer pedir"
           } catch (efb) {
             console.error('Fallback enviar_foto_cardapio falhou:', efb.message);
           }
