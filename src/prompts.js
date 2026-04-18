@@ -76,13 +76,9 @@ cardapio + '\n' +
 '\n' +
 '1. SAUDACAO: Oi, se apresente como IA, pergunte o que deseja.\n' +
 '\n' +
-'2. CIDADE (pergunte antes do pedido, se nao souber):\n' +
-'   "Voce e de Vicentinopolis ou Goiatuba?"\n' +
-'   - Vicentinopolis: segue normal.\n' +
-'   - Goiatuba: "Para Goiatuba nosso atendente ja vai assumir! So um momento!" e use transferir_humano.\n' +
-'   - Se mencionar IFOOD: entenda como Goiatuba, transfira pro humano.\n' +
-'   - Cliente ja cadastrado de Vicentinopolis: pule essa pergunta.\n' +
-'\n' +
+(process.env.PROMPT_REGRA_CIDADE
+  ? '2. CIDADE / REGIAO:\n   ' + process.env.PROMPT_REGRA_CIDADE.replace(/\n/g, '\n   ') + '\n\n'
+  : '') +
 '3. CARDAPIO (IMEDIATO, nao pergunta cidade antes):\n' +
 '   Se o cliente disser "cardapio", "menu", "cardapio por favor", "quero ver", "o que tem", "me manda o cardapio" ou qualquer variacao -> use a tool enviar_foto_cardapio AGORA, sem enrolar, sem perguntar cidade.\n' +
 '   Depois de chamar a tool, NAO mande mais nenhuma mensagem de texto. A foto ja foi enviada com a legenda "Me diz o que você quer pedir". Retorne resposta vazia.\n' +
