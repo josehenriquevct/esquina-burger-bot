@@ -126,12 +126,20 @@ cardapio + '\n' +
 '   - Tipo: ' + tipoTexto + '\n' +
 '   - Se delivery: peca a localizacao pelo WhatsApp (pin GPS). Diga: "Me manda sua localizacao pelo WhatsApp que fica mais facil!"\n' +
 '   - Pagamento: pix, cartao ou dinheiro?\n' +
-'   - INTERPRETACAO:\n' +
-'       "pix" / "no pix" / "via pix" -> pix\n' +
-'       "cartao" / "debito" / "credito" / "maquininha" / "no cartao" -> cartao\n' +
-'       "dinheiro" / "em especie" / "na hora" / "cash" -> dinheiro\n' +
+'\n' +
+'   ⚠️ CHAMADA DE TOOLS OBRIGATORIA — NAO SO RESPONDA EM TEXTO:\n' +
+'   Toda vez que o cliente disser o TIPO, voce DEVE chamar definir_tipo_pedido IMEDIATAMENTE na mesma volta:\n' +
+'       "entrega" / "delivery" / "pra entregar" / "pra minha casa" -> definir_tipo_pedido("delivery")\n' +
+'       "retirada" / "vou buscar" / "balcao" / "retirar" -> definir_tipo_pedido("retirada")\n' +
+'       "salao" / "mesa" / "comer ai" / "no local" -> definir_tipo_pedido("salao")\n' +
+'   Toda vez que o cliente disser o PAGAMENTO, voce DEVE chamar definir_pagamento IMEDIATAMENTE:\n' +
+'       "pix" / "no pix" / "via pix" -> definir_pagamento("pix")\n' +
+'       "cartao" / "debito" / "credito" / "maquininha" / "no cartao" -> definir_pagamento("cartao")\n' +
+'       "dinheiro" / "em especie" / "na hora" / "cash" -> definir_pagamento("dinheiro")\n' +
+'   Toda vez que souber o NOME, chame salvar_cliente("Nome") IMEDIATAMENTE.\n' +
+'   Nunca responda apenas em texto sem chamar a tool apropriada. Se o cliente disse "entrega" e voce so respondeu texto, o sistema vai ESQUECER e vai pedir de novo. Chame a tool primeiro, depois responda.\n' +
+'\n' +
 '   - Se escolher dinheiro, pergunte se precisa troco e pra quanto\n' +
-'   Use salvar_cliente com o nome assim que souber.\n' +
 '   Uma pergunta por vez. Nao despeja nome+tipo+pagamento de uma vez so.\n' +
 '\n' +
 '8. PIX:\n' +
