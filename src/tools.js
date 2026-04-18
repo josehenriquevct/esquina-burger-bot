@@ -11,7 +11,8 @@ import {
   getConfigLoja,
   fb,
 } from './firebase.js';
-import { enviarImagem } from './evolution.js';
+import { enviarImagem, enviarMensagem } from './evolution.js';
+import { gerarPixQr } from './pix.js';
 
 // ── Declarações das tools (formato Gemini) ─────────────────────
 
@@ -380,6 +381,50 @@ export async function executarTool(telefone, nome, args, estado) {
           ? `https://${config.publicUrl}/rastreio/${criado.key}`
           : '';
 
+        // PIX: gera QR dinâmico e envia foto + código copia-cola no WhatsApp
+        let pixInfo = null;
+        if (dados.pagamento === 'pix' && !alterado) {
+          try {
+            const pixResp = await gerarPixQr({
+              id: criado.key,
+              codigoConfirmacao: criado.codigoConfirmacao,
+              total,
+              cliente: pedido.cliente,
+            });
+            if (pixResp.sucesso) {
+              pixInfo = pixResp;
+              // Envia a foto do QR
+              if (pixResp.qr_code_base64) {
+                try {
+                  await enviarImagem(telefone, pixResp.qr_code_base64, `PIX · R$ ${total.toFixed(2).replace('.', ',')}`);
+                } catch (imgErr) {
+                  console.warn('Erro enviando QR img:', imgErr.message);
+                }
+              }
+              // Envia o código PIX copia-cola (mensagem separada)
+              if (pixResp.qr_code) {
+                try {
+                  await enviarMensagem(telefone, 'Se preferir, copia o código abaixo e cola no app do banco:');
+                  await enviarMensagem(telefone, pixResp.qr_code);
+                } catch (msgErr) {
+                  console.warn('Erro enviando codigo PIX:', msgErr.message);
+                }
+              }
+              // Guarda o paymentId no pedido pra consulta depois
+              try {
+                await fb.patch(`pedidos_abertos/${criado.key}`, {
+                  pix_payment_id: pixResp.id,
+                  pix_status: pixResp.status,
+                });
+              } catch {}
+            } else if (pixResp.status !== 'aguardando_token') {
+              console.warn('PIX gerar falhou:', pixResp.erro);
+            }
+          } catch (pixErr) {
+            console.error('Erro gerar PIX:', pixErr.message);
+          }
+        }
+
         return {
           sucesso: true,
           pedido_id: criado.key,
@@ -387,9 +432,12 @@ export async function executarTool(telefone, nome, args, estado) {
           alterado,
           codigoConfirmacao: criado.codigoConfirmacao,
           rastreioLink,
+          pix_enviado: !!pixInfo,
           instrucao_codigo: alterado
             ? `Pedido ATUALIZADO. Informe ao cliente que as mudanças foram registradas. Código: ${criado.codigoConfirmacao}.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`
-            : `Informe ao cliente o código de confirmação: ${criado.codigoConfirmacao}. O entregador vai pedir esse código na entrega.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`,
+            : (pixInfo
+                ? `Informe o cliente: codigo de confirmacao ${criado.codigoConfirmacao}, e diga que o QR Code PIX + o codigo copia-cola ja foram enviados separadamente. Lembre que o pagamento e confirmado automaticamente.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`
+                : `Informe ao cliente o código de confirmação: ${criado.codigoConfirmacao}. O entregador vai pedir esse código na entrega.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`),
         };
       } catch (e) {
         return { sucesso: false, erro: 'Falha ao salvar pedido: ' + e.message };

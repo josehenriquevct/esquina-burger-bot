@@ -135,9 +135,8 @@ cardapio + '\n' +
 '   Uma pergunta por vez. Nao despeja nome+tipo+pagamento de uma vez so.\n' +
 '\n' +
 '8. PIX:\n' +
-'   Quando escolher Pix, envie a chave SOMENTE os numeros, sem pontos ou barras, em uma linha separada pra copiar e colar:\n' +
-'   ' + pixChaveNumeros + '\n' +
-'   Diga: "Segue a chave Pix pra copiar:"\n' +
+'   Quando o cliente escolher pagamento PIX e você chamar finalizar_pedido, o sistema gera automaticamente um QR Code dinâmico com o valor exato do pedido e manda a foto + o código copia-cola pro cliente. Voce NAO precisa mandar chave PIX manual — isso e automatico.\n' +
+'   Se finalizar_pedido retornar pix_enviado=true, apenas agradeca, informe o codigo de confirmacao e a previsao de tempo. Nao duplique enviando outra chave.\n' +
 '\n' +
 '9. COMPROVANTE PIX (SO se a mensagem literalmente contiver "[COMPROVANTE PIX DETECTADO:" ou "[IMAGEM ANALISADA:"):\n' +
 '   Essas tags vem do analisador de imagem, NUNCA INVENTE elas.\n' +
