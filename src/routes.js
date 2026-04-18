@@ -9,6 +9,7 @@ import {
   verificarBotToken,
   sanitizarMensagem,
 } from './security.js';
+import { emitirNfce, consultarNfce, cancelarNfce, nfceStatus } from './nfce.js';
 
 var router = Router();
 
@@ -359,6 +360,46 @@ router.post('/entrega', authMiddleware, async function(req, res) {
     await fb.put('bot_config/bot', bot);
     console.log('Entrega ' + (ativa ? 'ATIVADA' : 'DESATIVADA'));
     res.json({ ok: true, entrega_ativa: ativa });
+  } catch (e) {
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// ── NFC-e (emissão de Nota Fiscal do Consumidor) ──────────────
+
+router.get('/nfce/status', authMiddleware, function(req, res) {
+  res.json(nfceStatus());
+});
+
+router.post('/nfce/emitir', authMiddleware, async function(req, res) {
+  var pedidoKey = req.body && req.body.pedidoKey;
+  var pedido = req.body && req.body.pedido; // alternativa: corpo do pedido direto
+  if (!pedidoKey && !pedido) return res.status(400).json({ error: 'pedidoKey ou pedido obrigatorio' });
+  try {
+    var r = await emitirNfce(pedidoKey ? String(pedidoKey) : pedido);
+    res.json(r);
+  } catch (e) {
+    console.error('Erro emitir NFCe:', e);
+    res.status(500).json({ error: 'Erro interno emitindo NFC-e' });
+  }
+});
+
+router.get('/nfce/consulta/:ref', authMiddleware, async function(req, res) {
+  try {
+    var r = await consultarNfce(req.params.ref);
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+router.post('/nfce/cancelar', authMiddleware, async function(req, res) {
+  var ref = req.body && req.body.ref;
+  var just = req.body && req.body.justificativa;
+  if (!ref) return res.status(400).json({ error: 'ref obrigatorio' });
+  try {
+    var r = await cancelarNfce(String(ref), String(just || ''));
+    res.json(r);
   } catch (e) {
     res.status(500).json({ error: 'Erro interno' });
   }

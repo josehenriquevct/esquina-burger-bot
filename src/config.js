@@ -51,6 +51,34 @@ export const config = {
 
   // Telefone interno (funcionario que manda pedidos por audio)
   telefoneInterno: process.env.TELEFONE_INTERNO || '5564999584599',
+
+  // ── Fiscal / NFC-e ──
+  fiscal: {
+    focusNfeUrl: process.env.FOCUSNFE_URL || 'https://api.focusnfe.com.br',
+    focusNfeToken: process.env.FOCUSNFE_TOKEN || '',
+    focusNfeHomolog: process.env.FOCUSNFE_HOMOLOG === 'true', // true = homologacao
+    certificadoBase64: process.env.CERTIFICADO_A1_BASE64 || '', // .pfx em base64
+    certificadoSenha: process.env.CERTIFICADO_A1_SENHA || '',
+    cnpj: process.env.EMPRESA_CNPJ || '46757307000132',
+    razaoSocial: process.env.EMPRESA_RAZAO_SOCIAL || 'ESQUINA HAMBURGUERIA LTDA',
+    nomeFantasia: process.env.EMPRESA_NOME_FANTASIA || 'Esquina Burger',
+    ie: process.env.EMPRESA_IE || '', // preencher quando souber
+    cnae: process.env.EMPRESA_CNAE || '5611203',
+    regimeTributario: parseInt(process.env.EMPRESA_REGIME || '1'), // 1=Simples Nacional
+    cep: process.env.EMPRESA_CEP || '75555000',
+    endereco: process.env.EMPRESA_ENDERECO || 'ENGENHEIRO CLAUDIO NEVES CARDOSO',
+    numero: process.env.EMPRESA_NUMERO || '155',
+    bairro: process.env.EMPRESA_BAIRRO || 'CENTRO',
+    municipio: process.env.EMPRESA_MUNICIPIO || 'VICENTINOPOLIS',
+    codMunicipio: process.env.EMPRESA_COD_MUNICIPIO || '5221502', // IBGE de Vicentinopolis-GO
+    uf: process.env.EMPRESA_UF || 'GO',
+    telefone: process.env.EMPRESA_TELEFONE || '6499596335',
+    // Defaults fiscais pro Simples Nacional (CNAE lanchonete)
+    cfopDefault: process.env.CFOP_DEFAULT || '5102',
+    csosnDefault: process.env.CSOSN_DEFAULT || '102', // 102 = Tributada pelo Simples sem permissao de credito
+    ncmDefault: process.env.NCM_DEFAULT || '21069090', // Preparacoes alimenticias diversas
+    cestDefault: process.env.CEST_DEFAULT || '',
+  },
 };
 
 // Validacao na inicializacao
