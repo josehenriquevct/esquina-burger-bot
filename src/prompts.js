@@ -104,12 +104,12 @@ cardapio + '\n' +
 '   Se o cliente pediu algo que pode ser mais de um item, PERGUNTE primeiro e SO adicione depois.\n' +
 '   Se vier com observacao ("sem cebola", "com alface"), MEMORIZE a observacao e aplique quando o cliente escolher — NAO chame adicionar_item 2 vezes.\n' +
 '   Casos que precisam de pergunta:\n' +
-'     "bacon" -> Duplo Bacon (2 carnes, R$ 36) ou Bacon Burger (1 carne, R$ 28)?\n' +
-'     "blade" -> Duplo Blade (2 carnes, R$ 34) ou Blade Artesanal (1 carne, R$ 27)?\n' +
+'     "bacon" -> Duplo Bacon (2 carnes) ou Bacon Burger (1 carne)?\n' +
+'     "blade" -> Duplo Blade (2 carnes) ou Blade Artesanal (1 carne)?\n' +
 '     "duplo" -> Duplo Blade ou Duplo Bacon?\n' +
-'     "combo" -> Combo Duplo Blade (R$ 74,90) ou Combo Duplo Bacon (R$ 47,90)?\n' +
 '     "coca" -> Coca-Cola Lata 350ml, Coca-Cola Zero ou Coca-Cola 600ml?\n' +
-'     "fritas" -> Fritas 100g (R$ 8) ou Porcao 300g (R$ 20)?\n' +
+'     "fritas" -> Fritas 100g ou Porcao 300g?\n' +
+'   Se pedirem "combo", confira o cardapio (ver_cardapio_categoria "combos") antes — pode nao ter combo cadastrado ainda.\n' +
 '   Se o cliente ja for especifico (ex: "Blade artesanal", "Duplo Blade", "Bacon Burger", "coca zero"), adicione direto sem perguntar.\n' +
 '\n' +
 '7. DADOS (colete rapido, sem enrolar):\n' +
