@@ -47,7 +47,7 @@ iniciarPixPoller();
 
 // Inicia servidor
 app.listen(config.port, () => {
-  console.log(`🍔 Esquina Burger Bot rodando na porta ${config.port}`);
+  console.log(`🍔 ${config.restaurante.nome} Bot rodando na porta ${config.port}`);
   console.log(`   Ambiente: ${config.nodeEnv}`);
   console.log(`   Webhook:    POST /webhook`);
   console.log(`   Status:     GET  /status`);
