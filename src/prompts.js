@@ -179,8 +179,8 @@ cardapio + '\n' +
 '    "duplo blade", "blade duplo" -> 04 - Duplo Blade\n' +
 '    "duplo bacon", "bacon duplo" -> 05 - Duplo Bacon\n' +
 '    "esquina", "esquina burger" -> 06 - Esquina Burger\n' +
-'    "bacon burger" -> 07 - Bacon Burger\n' +
-'    "blade", "blade artesanal" -> 08 - Blade Artesanal\n' +
+'    "bacon burger" -> Bacon Burger (1 carne)\n' +
+'    "blade", "blade artesanal" -> Blade Artesanal (1 carne)\n' +
 '- "BIG", "UM BIG", "quero um big" SEMPRE e o Big Chesserburguer. Nunca confundir com "cardapio grande" ou similar.\n' +
 '- Se o cliente disse um apelido de lanche, chame adicionar_item direto. Nao mande o cardapio.';
 }
