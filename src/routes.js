@@ -10,6 +10,7 @@ import {
   sanitizarMensagem,
 } from './security.js';
 import { emitirNfce, consultarNfce, cancelarNfce, nfceStatus } from './nfce.js';
+import { gerarPixQr, consultarPagamento, pixStatus } from './pix.js';
 
 var router = Router();
 
@@ -362,6 +363,32 @@ router.post('/entrega', authMiddleware, async function(req, res) {
     res.json({ ok: true, entrega_ativa: ativa });
   } catch (e) {
     res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// ── PIX QR Code (Mercado Pago) ─────────────────────────────────
+
+router.get('/pix/status', authMiddleware, function(req, res) {
+  res.json(pixStatus());
+});
+
+router.post('/pix/qr', authMiddleware, async function(req, res) {
+  var pedido = req.body && req.body.pedido;
+  if (!pedido) return res.status(400).json({ error: 'pedido obrigatorio' });
+  try {
+    var r = await gerarPixQr(pedido);
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: 'Erro ao gerar PIX' });
+  }
+});
+
+router.get('/pix/consulta/:id', authMiddleware, async function(req, res) {
+  try {
+    var r = await consultarPagamento(req.params.id);
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: 'Erro ao consultar pagamento' });
   }
 });
 

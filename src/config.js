@@ -52,6 +52,12 @@ export const config = {
   // Telefone interno (funcionario que manda pedidos por audio)
   telefoneInterno: process.env.TELEFONE_INTERNO || '5564999584599',
 
+  // ── PIX via Mercado Pago ──
+  mercadoPago: {
+    accessToken: process.env.MERCADO_PAGO_TOKEN || '',
+    webhookUrl: process.env.MERCADO_PAGO_WEBHOOK || '', // opcional: onde MP notifica pagamento
+  },
+
   // ── Fiscal / NFC-e ──
   fiscal: {
     focusNfeUrl: process.env.FOCUSNFE_URL || 'https://api.focusnfe.com.br',
