@@ -108,14 +108,11 @@ cardapio + '\n' +
 '6. ITEM AMBIGUO (NUNCA adicionar antes de saber qual):\n' +
 '   Se o cliente pediu algo que pode ser mais de um item, PERGUNTE primeiro e SO adicione depois.\n' +
 '   Se vier com observacao ("sem cebola", "com alface"), MEMORIZE a observacao e aplique quando o cliente escolher — NAO chame adicionar_item 2 vezes.\n' +
-'   Casos que precisam de pergunta:\n' +
-'     "bacon" -> Duplo Bacon (2 carnes) ou Bacon Burger (1 carne)?\n' +
-'     "blade" -> Duplo Blade (2 carnes) ou Blade Artesanal (1 carne)?\n' +
-'     "duplo" -> Duplo Blade ou Duplo Bacon?\n' +
-'     "coca" -> Coca-Cola Lata 350ml, Coca-Cola Zero ou Coca-Cola 600ml?\n' +
-'     "fritas" -> Fritas 100g ou Porcao 300g?\n' +
-'   Se pedirem "combo", confira o cardapio (ver_cardapio_categoria "combos") antes — pode nao ter combo cadastrado ainda.\n' +
-'   Se o cliente ja for especifico (ex: "Blade artesanal", "Duplo Blade", "Bacon Burger", "coca zero"), adicione direto sem perguntar.\n' +
+(process.env.PROMPT_ITENS_AMBIGUOS
+  ? '   Casos que precisam de pergunta (especificos desta loja):\n     ' + process.env.PROMPT_ITENS_AMBIGUOS.replace(/\n/g, '\n     ') + '\n'
+  : '   Regra geral: se o cliente pede algo vago (so "o burger", "aquele lanche", "o combo") e tem mais de uma opcao no cardapio, LISTE as opcoes e PERGUNTE qual. Nao adivinhe.\n') +
+'   Se pedirem "combo", confira o cardapio (ver_cardapio_categoria "combos") antes — pode nao ter combo cadastrado.\n' +
+'   Se o cliente ja for especifico (nome completo ou codigo), adicione direto sem perguntar.\n' +
 '\n' +
 '7. DADOS (colete rapido, sem enrolar):\n' +
 '   - Nome (se nao souber ainda)\n' +
@@ -177,17 +174,9 @@ cardapio + '\n' +
 '- SEMPRE use finalizar_pedido quando o cliente confirmar. O pedido precisa ir pro PDV.\n' +
 '- Itens esgotados nao aparecem, nao ofereca\n' +
 '- Mensagens curtas e diretas SEMPRE\n' +
-'- Apelidos de lanches (use adicionar_item direto, nao mostre cardapio):\n' +
-'    "jr", "junior", "juniors" -> 01 - Junior\'s Burger\n' +
-'    "big", "big chesse", "cheese" -> 02 - Big Chesserburguer\n' +
-'    "smoke", "smoker" -> 03 - Smoke Burger\n' +
-'    "duplo blade", "blade duplo" -> 04 - Duplo Blade\n' +
-'    "duplo bacon", "bacon duplo" -> 05 - Duplo Bacon\n' +
-'    "esquina", "esquina burger" -> 06 - Esquina Burger\n' +
-'    "bacon burger" -> 07 - Bacon Burger\n' +
-'    "blade", "blade artesanal" -> 08 - Blade Artesanal\n' +
-'- "BIG", "UM BIG", "quero um big" SEMPRE e o Big Chesserburguer. Nunca confundir com "cardapio grande" ou similar.\n' +
-'- Se o cliente disse um apelido de lanche, chame adicionar_item direto. Nao mande o cardapio.';
+(process.env.PROMPT_APELIDOS_LANCHES
+  ? '- Apelidos de lanches (use adicionar_item direto, nao mostre cardapio):\n    ' + process.env.PROMPT_APELIDOS_LANCHES.replace(/\n/g, '\n    ') + '\n- Se o cliente disse um apelido de lanche, chame adicionar_item direto. Nao mande o cardapio.'
+  : '- Se o cliente pedir algo pelo nome do item do cardapio, use adicionar_item direto.');
 }
 
 // ── Prompt para pedidos internos (funcionario manda audio) ────
@@ -213,8 +202,10 @@ export async function promptInterno() {
 '- Se NAO entendeu algo, peca pra repetir de forma curta: "Nao entendi o segundo item, pode repetir?"\n' +
 '- NAO peca pagamento (funcionario resolve no caixa)\n' +
 '- NAO peca endereco (nunca e delivery)\n' +
-'- Responda MUITO curto: "Anotei! Mesa 3: 2x Big + 1x Coca. Cod: XXXX"\n' +
-'- Apelidos: jr ou junior = Junior\'s, big = Big Chesserburguer, smoke = Smoke Burger\n' +
+'- Responda MUITO curto: "Anotei! Mesa 3: [itens]. Cod: XXXX"\n' +
+(process.env.PROMPT_APELIDOS_LANCHES
+  ? '- Apelidos (use adicionar_item direto): ' + process.env.PROMPT_APELIDOS_LANCHES.replace(/\n/g, '; ') + '\n'
+  : '') +
 '\n' +
 'CARDAPIO (itens disponiveis):\n' +
 cardapio + '\n' +
