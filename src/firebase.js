@@ -183,8 +183,10 @@ export async function getConfigLoja() {
     var botCfg = (await fb.get('bot_config/bot')) || {};
     var entregaCfg = (await fb.get('bot_config/entrega')) || {};
 
-    // Calcula se a loja esta aberta
+    // Calcula estado da loja: aberta | antes_abrir | depois_fechar | dia_fechado
     var lojaAberta = true;
+    var estadoLoja = 'aberta';
+    var abreEm = '';
     var horarioAtivo = botCfg.horarioAtivo === true;
 
     if (horarioAtivo && botCfg.horaAbertura && botCfg.horaFechamento) {
@@ -202,17 +204,32 @@ export async function getConfigLoja() {
       }
       var partsFecha = fechaUsado.split(':').map(Number);
       var minFecha = partsFecha[0] * 60 + (partsFecha[1] || 0);
+      abreEm = botCfg.horaAbertura;
 
-      if (minAbre < minFecha) {
-        lojaAberta = horaAtual >= minAbre && horaAtual <= minFecha;
-      } else {
-        // Fechamento cruza meia-noite (ex: 18h abre, 01h fecha)
-        lojaAberta = horaAtual >= minAbre || horaAtual <= minFecha;
-      }
-
-      // Verifica dia da semana
+      // Dia nao funciona = dia_fechado
       if (Array.isArray(botCfg.diasFuncionamento) && botCfg.diasFuncionamento.indexOf(diaSemana) === -1) {
         lojaAberta = false;
+        estadoLoja = 'dia_fechado';
+      } else if (minAbre < minFecha) {
+        // Horario normal (ex: 18h-23h)
+        if (horaAtual < minAbre) {
+          lojaAberta = false;
+          estadoLoja = 'antes_abrir'; // ainda vai abrir hoje
+        } else if (horaAtual > minFecha) {
+          lojaAberta = false;
+          estadoLoja = 'depois_fechar'; // ja fechou
+        } else {
+          lojaAberta = true;
+        }
+      } else {
+        // Cruza meia-noite (ex: 18h abre, 01h fecha do dia seguinte)
+        if (horaAtual >= minAbre || horaAtual <= minFecha) {
+          lojaAberta = true;
+        } else {
+          // Entre fecha e abre = fechado. Como abre hoje ainda, antes_abrir.
+          lojaAberta = false;
+          estadoLoja = 'antes_abrir';
+        }
       }
     }
 
@@ -223,6 +240,9 @@ export async function getConfigLoja() {
       horario_abre: botCfg.horaAbertura || '',
       horario_fecha: botCfg.horaFechamento || '',
       loja_aberta: lojaAberta,
+      estado_loja: estadoLoja, // aberta | antes_abrir | depois_fechar | dia_fechado
+      aceita_agendamento: estadoLoja === 'antes_abrir',
+      abre_em: abreEm,
       msg_fechado: botCfg.msgFechado || 'Estamos fechados no momento. Volte no nosso horario de funcionamento.',
       chave_pix: botCfg.chavePix || '',
       tipo_chave_pix: botCfg.tipoChavePix || '',

@@ -165,13 +165,14 @@ router.post('/webhook', async function(req, res) {
   msg.texto = sanitizarMensagem(msg.texto);
 
   // ── BLOQUEIO FORA DO HORARIO ────────────────────────────────
-  // Se a loja configurou horarioAtivo=true no Firebase e esta fora
-  // do horario, responde msg_fechado e nao processa. Numero interno
-  // e conversas pausado_humano passam.
+  // Se loja fechada de vez (dia_fechado ou depois_fechar), bloqueia
+  // e manda msg_fechado. Se estado=antes_abrir, DEIXA PASSAR pra
+  // o Gemini oferecer agendamento de pedido.
+  // Numero interno e conversas pausado_humano sempre passam.
   if (!isNumeroInterno(msg.telefone)) {
     try {
       var cfgLoja = await getConfigLoja();
-      if (cfgLoja && cfgLoja.horario_ativo && cfgLoja.loja_aberta === false) {
+      if (cfgLoja && cfgLoja.horario_ativo && cfgLoja.loja_aberta === false && !cfgLoja.aceita_agendamento) {
         var convExist = await getConversa(msg.telefone).catch(function(){ return null; });
         if (!convExist || convExist.status !== 'pausado_humano') {
           var ultimoAviso = (convExist && convExist.ultimoAvisoFechadoEm) || 0;
@@ -181,7 +182,7 @@ router.post('/webhook', async function(req, res) {
             await enviarMensagem(msg.telefone, fechadoMsg).catch(function(){});
             await adicionarMensagem(msg.telefone, { role: 'assistant', texto: fechadoMsg, auto: 'fechado' }).catch(function(){});
             await salvarConversa(msg.telefone, { ultimoAvisoFechadoEm: Date.now() }).catch(function(){});
-            console.log('Loja fechada — avisado ' + msg.telefone);
+            console.log('Loja fechada (' + cfgLoja.estado_loja + ') — avisado ' + msg.telefone);
           } else {
             console.log('Loja fechada — ' + msg.telefone + ' ja avisado ha < 30min');
           }

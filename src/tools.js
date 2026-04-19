@@ -120,6 +120,17 @@ export const TOOL_DECLARATIONS = [{
       parameters: { type: 'OBJECT', properties: {} },
     },
     {
+      name: 'agendar_pedido',
+      description: 'Marca o pedido para sair/entregar em um horário específico (agendamento). Use quando a loja ainda não abriu e o cliente aceita esperar, ou quando quer pedir pra um horário futuro.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          horario: { type: 'STRING', description: 'Horário desejado (HH:MM formato 24h, ex: "18:30" ou "20:00")' },
+        },
+        required: ['horario'],
+      },
+    },
+    {
       name: 'transferir_humano',
       description: 'Transfere para atendente humano. Use em reclamações ou pedido explícito.',
       parameters: {
@@ -363,6 +374,8 @@ export async function executarTool(telefone, nome, args, estado) {
         tipo: dados.tipo,
         pagamento: dados.pagamento,
         troco: dados.troco || '',
+        agendadoPara: dados.agendadoPara || null,
+        agendado: !!dados.agendadoPara,
         cliente: {
           nome: dados.nome,
           telefone: dados.telefone || telefone,
@@ -467,6 +480,15 @@ export async function executarTool(telefone, nome, args, estado) {
       estado.dados = manter;
       estado.pedidoKeyExistente = null;
       return { sucesso: true };
+    }
+
+    case 'agendar_pedido': {
+      const h = String(args.horario || '').trim();
+      if (!/^\d{1,2}:\d{2}$/.test(h)) {
+        return { sucesso: false, erro: 'Horário inválido. Use formato HH:MM (ex: "18:30")' };
+      }
+      dados.agendadoPara = h;
+      return { sucesso: true, agendadoPara: h, mensagem: 'Pedido agendado para ' + h };
     }
 
     case 'transferir_humano': {

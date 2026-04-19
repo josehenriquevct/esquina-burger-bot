@@ -16,6 +16,18 @@ export async function systemPrompt(configLoja) {
     ? '- Horario de funcionamento: ' + horario
     : '- Horario: atende 24h (restricao de horario desativada)';
 
+  // Bloco especial quando loja ainda vai abrir hoje (antes_abrir)
+  var agendamentoTexto = '';
+  if (configLoja && configLoja.aceita_agendamento) {
+    agendamentoTexto = '\n\n⏰ ATENCAO — LOJA AINDA NAO ABRIU HOJE:\n' +
+      'A loja abre as ' + (configLoja.abre_em || horario) + '. Voce ESTA antes do horario, mas aceita AGENDAMENTO de pedidos.\n' +
+      '- Seja transparente: "Oi! Ainda nao abrimos — abrimos as ' + (configLoja.abre_em || horario) + '. Mas posso agendar seu pedido pra sair na hora da abertura ou no horario que voce quiser (depois que abrirmos). Topa?"\n' +
+      '- Se o cliente aceitar, monte o pedido normalmente.\n' +
+      '- Pergunte o HORARIO DESEJADO de entrega/retirada (ex: "Quer pra ' + (configLoja.abre_em || horario) + ' na hora que abrirmos, ou depois?").\n' +
+      '- Quando chamar finalizar_pedido, o pedido vai marcado como AGENDADO. A loja vai ver no PDV e preparar no horario combinado.\n' +
+      '- Se o cliente NAO quer agendar, apenas diga pra voltar no horario de funcionamento e encerre.';
+  }
+
   var entregaTexto = entregaAtiva
     ? '- Entrega disponivel. Taxa: R$ ' + taxaEntrega.toFixed(2).replace('.', ',')
     : '- ENTREGA DESATIVADA HOJE. Apenas retirada ou salao.';
@@ -64,7 +76,7 @@ export async function systemPrompt(configLoja) {
 'INFORMACOES DA LOJA:\n' +
 '- ' + nome + ' -- unidade ' + unidade + '\n' +
 '- Endereco: ' + endereco + '\n' +
-horarioTexto + '\n' +
+horarioTexto + agendamentoTexto + '\n' +
 entregaTexto + '\n' +
 '- Pagamento: Pix, Cartao, Dinheiro' + pixTexto + '\n' +
 dadosClienteTexto + '\n' +
