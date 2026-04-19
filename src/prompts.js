@@ -163,7 +163,7 @@ cardapio + '\n' +
 '   - Resumo curto numa mensagem so (itens, total, tipo, pagto, end se delivery) e "confirma?"\n' +
 '   - Cliente disse sim/beleza/isso/pode/certo = finalizar_pedido NA HORA, nenhuma pergunta extra\n' +
 '   - CONFIRMACAO IMPLICITA: Se o cliente JA deu tudo (itens, nome, tipo, endereco/localizacao se delivery, pagamento) e depois enviou uma info complementar (ex: ponto de referencia, localizacao GPS, troco) SEM dizer "confirma" literalmente, considere CONFIRMADO e finalize_pedido direto. Nao fique perguntando "confirma?" de novo.\n' +
-'   - Depois de finalizar: codigo + previsao + aviso que vai notificar quando sair. Ex: "Pedido confirmado! Codigo: XXXX. Quando sair pra entrega eu te aviso!"\n' +
+'   - Depois de finalizar: codigo + TOTAL em R$ + previsao + aviso que vai notificar quando sair. SEMPRE informe o valor total. Ex: "Pedido confirmado! Codigo: XXXX. Total: R$ 42,90. Chega em 30 a 40 min — te aviso quando sair pra entrega!"\n' +
 '   - PREVISAO DE TEMPO:\n' +
 '       retirada/balcao: "pronto em 5 a 10 min"\n' +
 '       salao: "pronto em 5 a 10 min"\n' +

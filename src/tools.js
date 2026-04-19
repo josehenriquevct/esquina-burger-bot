@@ -457,11 +457,16 @@ export async function executarTool(telefone, nome, args, estado) {
           codigoConfirmacao: criado.codigoConfirmacao,
           rastreioLink,
           pix_enviado: !!pixInfo,
-          instrucao_codigo: alterado
-            ? `Pedido ATUALIZADO. Informe ao cliente que as mudanças foram registradas. Código: ${criado.codigoConfirmacao}.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`
-            : (pixInfo
-                ? `Informe o cliente: codigo de confirmacao ${criado.codigoConfirmacao}, e diga que o QR Code PIX + o codigo copia-cola ja foram enviados separadamente. Lembre que o pagamento e confirmado automaticamente.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`
-                : `Informe ao cliente o código de confirmação: ${criado.codigoConfirmacao}. O entregador vai pedir esse código na entrega.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`),
+          instrucao_codigo: (() => {
+            const totalFmt = `R$ ${total.toFixed(2).replace('.', ',')}`;
+            if (alterado) {
+              return `Pedido ATUALIZADO. Informe ao cliente que as mudanças foram registradas. Código: ${criado.codigoConfirmacao}. Novo total: ${totalFmt}.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`;
+            }
+            if (pixInfo) {
+              return `Informe o cliente: codigo de confirmacao ${criado.codigoConfirmacao}, TOTAL ${totalFmt}, e diga que o QR Code PIX + o codigo copia-cola ja foram enviados separadamente. SEMPRE mencione o valor total na confirmacao. Lembre que o pagamento e confirmado automaticamente.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`;
+            }
+            return `Informe ao cliente o código de confirmação ${criado.codigoConfirmacao} E o TOTAL ${totalFmt}. SEMPRE mencione o valor total na confirmacao. O entregador vai pedir esse código na entrega.${rastreioLink ? ` Rastreio: ${rastreioLink}` : ''}`;
+          })(),
         };
       } catch (e) {
         return { sucesso: false, erro: 'Falha ao salvar pedido: ' + e.message };
