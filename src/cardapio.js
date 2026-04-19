@@ -45,27 +45,46 @@ function raiz(w) {
 }
 
 // Scoring: conta palavras da query que aparecem em nome/compacto/desc.
-// Peso maior pro nome. Desempate: menos palavras no nome (= mais específico).
+// Peso maior pro nome. Bonus pra quando a query começa com "x" (lanche).
+// Desempate: mais palavras do nome batidas (cobertura), depois menos palavras sobrando.
 function encontrarMelhorMatch(lista, qNorm) {
-  const palavras = qNorm.split(' ').filter(w => w.length >= 2).map(raiz);
-  if (!palavras.length) return null;
+  const palavrasRaw = qNorm.split(' ').filter(Boolean);
+  // Detecta "x ..." / "X-..." — usuário tá pedindo um LANCHE (nome começa com "x.")
+  const querLanche = palavrasRaw[0] === 'x' || palavrasRaw[0] === 'xis';
+  const palavras = palavrasRaw.filter(w => w.length >= 2).map(raiz);
+  // Se só "x" foi digitado (sem outro termo), ainda assim mantém a busca
+  if (!palavras.length && !querLanche) return null;
 
   const scored = lista.map(i => {
     const nomeN = normalizar(i.nome);
-    const nomeCompacto = nomeN.replace(/\s+/g, '');
+    const palavrasNome = nomeN.split(' ').filter(Boolean);
+    // Compacto sem espaços NEM pontuação — pra pegar "xtudo" vs "x. tudo"
+    const nomeCompacto = nomeN.replace(/[\s\.,]+/g, '');
     const descN = normalizar(i.desc || '');
+    const ehLanche = /^x\b|^x\./.test(nomeN);
     let score = 0;
     let matches = 0;
     for (const w of palavras) {
-      if (nomeN.includes(w)) { score += 3; matches++; }
+      if (palavrasNome.some(p => p === w || p.replace(/\./g,'') === w)) { score += 4; matches++; }
+      else if (nomeN.includes(w)) { score += 3; matches++; }
       else if (nomeCompacto.includes(w)) { score += 2; matches++; }
       else if (descN.includes(w)) { score += 1; matches++; }
     }
-    return { item: i, score, matches, len: nomeN.length };
+    // Se o cliente disse "x ..." e o item começa com "X.", é muito mais
+    // provável ser o lanche do que um adicional avulso com o mesmo nome
+    if (querLanche && ehLanche) score += 5;
+    if (querLanche && !ehLanche) score -= 2;
+    return { item: i, score, matches, totalPalavrasNome: palavrasNome.length, len: nomeN.length };
   }).filter(s => s.score > 0);
 
   if (!scored.length) return null;
-  scored.sort((a, b) => b.score - a.score || b.matches - a.matches || a.len - b.len);
+  // Ordena: maior score → mais matches → menos palavras "sobrando" no nome → nome mais curto
+  scored.sort((a, b) =>
+    b.score - a.score ||
+    b.matches - a.matches ||
+    Math.abs(a.totalPalavrasNome - palavras.length) - Math.abs(b.totalPalavrasNome - palavras.length) ||
+    a.len - b.len
+  );
   return scored[0].item;
 }
 
