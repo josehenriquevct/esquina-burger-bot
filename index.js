@@ -16,7 +16,8 @@ if (erros.length && config.nodeEnv === 'production') {
 const app = express();
 
 // Limite de payload (evita ataques de payload gigante)
-app.use(express.json({ limit: '1mb' }));
+// 25mb suporta webhooks com áudio/imagem base64 do WhatsApp
+app.use(express.json({ limit: '25mb' }));
 
 // Segurança: CORS configurável + headers de proteção
 app.use(corsMiddleware);
