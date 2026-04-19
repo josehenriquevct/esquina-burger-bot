@@ -189,12 +189,16 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
         // Texto vazio
         console.error('Gemini retornou texto vazio. Ultima tool:', ultimaToolUsada, 'FinishReason:', finishReason);
 
-        // MALFORMED_FUNCTION_CALL: Gemini tentou chamar tool com args inválidos.
-        // Recria o chat SEM a tentativa quebrada e reenvia o texto original do
-        // cliente — retry silencioso, sem vazar instrução técnica na conversa.
-        if (finishReason === 'MALFORMED_FUNCTION_CALL' && !estado._retryMalformed) {
+        // Retry silencioso quando Gemini retorna texto vazio sem chamar tool:
+        // - MALFORMED_FUNCTION_CALL: args invalidos, tentou tool bugada
+        // - STOP / OTHER: modelo escolheu nao responder (ocorre com prompts
+        //   confusos ou quando fica em duvida). Retry com um hint no ar
+        //   costuma resolver.
+        const finishMotivoRetry = ['MALFORMED_FUNCTION_CALL', 'STOP', 'OTHER'].includes(finishReason)
+          || !finishReason;
+        if (finishMotivoRetry && !estado._retryMalformed) {
           estado._retryMalformed = true;
-          console.log('Retry silencioso apos MALFORMED_FUNCTION_CALL');
+          console.log('Retry silencioso — FinishReason=' + finishReason + ', ultima tool=' + ultimaToolUsada);
           try {
             var chatRetry = model.startChat({ history: history });
             result = await comTimeout(
@@ -202,10 +206,10 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
               GEMINI_TIMEOUT_MS,
               'gemini-timeout-retry'
             );
-            chat = chatRetry; // troca pro chat limpo pra próximas iterações
+            chat = chatRetry;
             continue;
           } catch (eRetry) {
-            console.error('Retry malformed falhou:', eRetry.message);
+            console.error('Retry falhou:', eRetry.message);
           }
         }
 
