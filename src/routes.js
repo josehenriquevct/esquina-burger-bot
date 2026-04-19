@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { config } from './config.js';
 import { processarMensagem, processarPedidoInterno, transcreverAudio } from './ai.js';
 import { enviarMensagem, mostrarDigitando, parseWebhook, baixarMidiaBase64 } from './evolution.js';
-import { adicionarMensagem, salvarConversa, getConversa, upsertCliente, fb } from './firebase.js';
+import { adicionarMensagem, salvarConversa, getConversa, upsertCliente, getConfigLoja, fb } from './firebase.js';
 import {
   verificarRateLimit,
   verificarWebhookToken,
@@ -163,6 +163,35 @@ router.post('/webhook', async function(req, res) {
   }
 
   msg.texto = sanitizarMensagem(msg.texto);
+
+  // ── BLOQUEIO FORA DO HORARIO ────────────────────────────────
+  // Se a loja configurou horarioAtivo=true no Firebase e esta fora
+  // do horario, responde msg_fechado e nao processa. Numero interno
+  // e conversas pausado_humano passam.
+  if (!isNumeroInterno(msg.telefone)) {
+    try {
+      var cfgLoja = await getConfigLoja();
+      if (cfgLoja && cfgLoja.horario_ativo && cfgLoja.loja_aberta === false) {
+        var convExist = await getConversa(msg.telefone).catch(function(){ return null; });
+        if (!convExist || convExist.status !== 'pausado_humano') {
+          var ultimoAviso = (convExist && convExist.ultimoAvisoFechadoEm) || 0;
+          var TRINTA_MIN = 30 * 60 * 1000;
+          if (Date.now() - ultimoAviso > TRINTA_MIN) {
+            var fechadoMsg = cfgLoja.msg_fechado || 'Estamos fechados no momento. Volte no nosso horario de funcionamento.';
+            await enviarMensagem(msg.telefone, fechadoMsg).catch(function(){});
+            await adicionarMensagem(msg.telefone, { role: 'assistant', texto: fechadoMsg, auto: 'fechado' }).catch(function(){});
+            await salvarConversa(msg.telefone, { ultimoAvisoFechadoEm: Date.now() }).catch(function(){});
+            console.log('Loja fechada — avisado ' + msg.telefone);
+          } else {
+            console.log('Loja fechada — ' + msg.telefone + ' ja avisado ha < 30min');
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Erro check horario:', e.message);
+    }
+  }
 
   // ── NUMERO INTERNO (funcionario) ────────────────────────────
   if (isNumeroInterno(msg.telefone)) {

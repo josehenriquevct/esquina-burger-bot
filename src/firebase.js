@@ -191,19 +191,26 @@ export async function getConfigLoja() {
       var agora = new Date();
       var brTime = new Date(agora.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
       var horaAtual = brTime.getHours() * 60 + brTime.getMinutes();
+      var diaSemana = brTime.getDay(); // 0=dom, 5=sex, 6=sab
       var partsAbre = botCfg.horaAbertura.split(':').map(Number);
-      var partsFecha = botCfg.horaFechamento.split(':').map(Number);
       var minAbre = partsAbre[0] * 60 + (partsAbre[1] || 0);
+
+      // Usa horaFechamentoFDS em sex (5) e sab (6) se estiver preenchido
+      var fechaUsado = botCfg.horaFechamento;
+      if ((diaSemana === 5 || diaSemana === 6) && botCfg.horaFechamentoFDS) {
+        fechaUsado = botCfg.horaFechamentoFDS;
+      }
+      var partsFecha = fechaUsado.split(':').map(Number);
       var minFecha = partsFecha[0] * 60 + (partsFecha[1] || 0);
 
       if (minAbre < minFecha) {
         lojaAberta = horaAtual >= minAbre && horaAtual <= minFecha;
       } else {
+        // Fechamento cruza meia-noite (ex: 18h abre, 01h fecha)
         lojaAberta = horaAtual >= minAbre || horaAtual <= minFecha;
       }
 
       // Verifica dia da semana
-      var diaSemana = brTime.getDay();
       if (Array.isArray(botCfg.diasFuncionamento) && botCfg.diasFuncionamento.indexOf(diaSemana) === -1) {
         lojaAberta = false;
       }
