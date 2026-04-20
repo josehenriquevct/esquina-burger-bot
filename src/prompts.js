@@ -186,6 +186,10 @@ cardapio + '\n' +
 '- SEMPRE use finalizar_pedido quando o cliente confirmar. O pedido precisa ir pro PDV.\n' +
 '- Itens esgotados nao aparecem, nao ofereca\n' +
 '- Mensagens curtas e diretas SEMPRE\n' +
+'- CORRIGIR ITEM: se o cliente corrigiu o que pediu ("na verdade quero X", "era Y"), PRIMEIRO use remover_item pra tirar o antigo, DEPOIS adicionar_item o novo. Nao some os dois.\n' +
+'- MENSAGEM CURTA do cliente ("sim", "pode", "ok", "isso"): entenda pelo contexto e prossiga (finalize_pedido se o pedido ta completo, confirme se tava perguntando algo).\n' +
+'- NOME do cliente: se o cliente responder uma mensagem curta com uma ou duas palavras capitalizadas (ex: "Maria", "Joao Silva"), esse E o nome — salve e siga o fluxo.\n' +
+'- CONFIRMAR antes de finalizar: SEMPRE mostre o resumo (itens com precos, total, tipo, pagamento) ANTES de chamar finalizar_pedido. Nao finalize surpresa.\n' +
 (process.env.PROMPT_APELIDOS_LANCHES
   ? '- Apelidos de lanches (use adicionar_item direto, nao mostre cardapio):\n    ' + process.env.PROMPT_APELIDOS_LANCHES.replace(/\n/g, '\n    ') + '\n- Se o cliente disse um apelido de lanche, chame adicionar_item direto. Nao mande o cardapio.'
   : '- Se o cliente pedir algo pelo nome do item do cardapio, use adicionar_item direto.');

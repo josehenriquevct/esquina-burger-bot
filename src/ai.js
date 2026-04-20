@@ -191,18 +191,25 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
 
         // Retry silencioso quando Gemini retorna texto vazio sem chamar tool:
         // - MALFORMED_FUNCTION_CALL: args invalidos, tentou tool bugada
-        // - STOP / OTHER: modelo escolheu nao responder (ocorre com prompts
-        //   confusos ou quando fica em duvida). Retry com um hint no ar
-        //   costuma resolver.
+        // - STOP / OTHER: modelo escolheu nao responder. Retry com HINT
+        //   contextual (nudge pra dar resposta). Se so repetir o mesmo input,
+        //   Gemini retorna o mesmo vazio.
         const finishMotivoRetry = ['MALFORMED_FUNCTION_CALL', 'STOP', 'OTHER'].includes(finishReason)
           || !finishReason;
         if (finishMotivoRetry && !estado._retryMalformed) {
           estado._retryMalformed = true;
           console.log('Retry silencioso — FinishReason=' + finishReason + ', ultima tool=' + ultimaToolUsada);
           try {
-            var chatRetry = model.startChat({ history: history });
+            // Filtra history pra remover Contents sem parts validas (causa
+            // "Each Content should have at least one part")
+            var historyLimpo = history.filter(function (c) {
+              return c && c.parts && c.parts.length > 0 && c.parts[0] && (c.parts[0].text || c.parts[0].functionCall || c.parts[0].functionResponse);
+            });
+            // Adiciona HINT pra mudar o contexto — sem isso o retry da mesmo resultado
+            var textoComHint = String(texto || '').trim() + '\n\n(responda agora em portugues em UMA mensagem curta. Se faltar info, pergunte. Se cliente disse um nome, confirme e siga. Se disse sim/ok, prossiga com o pedido.)';
+            var chatRetry = model.startChat({ history: historyLimpo });
             result = await comTimeout(
-              chatRetry.sendMessage(texto),
+              chatRetry.sendMessage(textoComHint),
               GEMINI_TIMEOUT_MS,
               'gemini-timeout-retry'
             );
@@ -218,7 +225,7 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
         if (ultimaToolUsada === 'enviar_foto_cardapio') return '';
         if (ultimaToolUsada === 'finalizar_pedido') return 'Prontinho, pedido na cozinha!';
         // Fallback: cliente pediu cardápio e Gemini travou — manda a foto direto
-        var textoLower = String(texto || '').toLowerCase();
+        var textoLower = String(texto || '').toLowerCase().trim();
         if (/card[áa]pio|menu|\bver\b.*comida|\bo que\b.*tem/.test(textoLower)) {
           console.log('Fallback cardápio: chamando enviar_foto_cardapio diretamente');
           try {
@@ -228,7 +235,29 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
             console.error('Fallback enviar_foto_cardapio falhou:', efb.message);
           }
         }
-        return 'Pode repetir, por favor?';
+        // FALLBACKS heuristicos — se Gemini travou mas o texto e claro, responde algo util
+        // (evita o loop chato de "Pode repetir, por favor?")
+
+        // 1. "Sim", "Ok", "Pode", "Isso" sem estado pendente → seguir em frente
+        if (/^(sim|isso|isso mesmo|pode|pode ser|ok|okay|beleza|certo|claro|perfeito|tudo certo|taokay|ta okay|ta bom|👍|✅)$/i.test(textoLower)) {
+          return 'Beleza! Me conta o que mais voce quer pedir, ou se ja ta tudo certo.';
+        }
+        // 2. "Nao", "nope" → acabou o pedido?
+        if (/^(nao|não|so isso|só isso|so|só|s[oó] isso mesmo|fechou|fechar)$/i.test(textoLower)) {
+          return 'Certo! Se quiser finalizar o pedido, me diz seu nome, se é entrega ou retirada, e a forma de pagamento.';
+        }
+        // 3. Parece um NOME (1-2 palavras, primeira letra maiuscula no original, sem digitos)
+        var textoOriginal = String(texto || '').trim();
+        if (!estado.dados.nome &&
+            /^[A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+( [A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]+)?$/.test(textoOriginal) &&
+            textoOriginal.length >= 3 && textoOriginal.length <= 40) {
+          // Provavelmente eh nome. Salva e segue.
+          estado.dados.nome = textoOriginal;
+          await persistir();
+          console.log('Fallback nome: salvo "' + textoOriginal + '"');
+          return `Beleza, ${textoOriginal.split(' ')[0]}! Agora me diz se é entrega, retirada ou salão.`;
+        }
+        return 'Pode repetir, por favor? Nao consegui entender direito.';
       } catch (e2) {
         console.error('Erro ao extrair texto do Gemini:', e2.message);
         await persistir();
