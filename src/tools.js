@@ -250,18 +250,20 @@ export async function executarTool(telefone, nome, args, estado) {
       let item = await buscarItem(args.nome_ou_id);
       let origem = 'cardapio';
       if (!item) { item = await buscarAdicional(args.nome_ou_id); origem = 'adicional'; }
-      console.log('[tools] adicionar_item q="' + args.nome_ou_id + '" obs="' + (args.observacao || '') + '" → ' + (item ? origem + ':id=' + item.id + ' ' + item.nome + ' (R$' + item.preco + ')' : 'NAO ENCONTRADO'));
       if (!item) return { sucesso: false, erro: `Item "${args.nome_ou_id}" não encontrado no cardápio.` };
 
       const qtd = normalizarQuantidade(args.quantidade);
       let obs = args.observacao ? String(args.observacao).slice(0, 200) : '';
 
       // Detecta "X extra" na observacao e converte em item adicional separado.
-      // Claude as vezes coloca "com bacon extra" na obs em vez de chamar
-      // adicionar_item separado pro adicional. Aqui a gente garante que o
-      // preco do extra seja cobrado corretamente, independente do que Claude
-      // decidiu fazer.
-      const extrasDetectados = detectarExtrasNaObs(obs);
+      // SO aplica se o item atual for um LANCHE (burger/combo/porcao) — nao
+      // se o item atual JA FOR um adicional/extra (senao duplica quando
+      // Claude ja chamou adicionar_item pro extra separadamente). Item de
+      // cat="extras" ou encontrado em "adicionais" nao dispara detector.
+      const ehAdicionalMesmo = item.cat === 'extras' || origem === 'adicional';
+      const extrasDetectados = ehAdicionalMesmo
+        ? { limpa: obs, extras: [] }
+        : detectarExtrasNaObs(obs);
       if (extrasDetectados.limpa !== obs) {
         obs = extrasDetectados.limpa;
       }
@@ -272,20 +274,30 @@ export async function executarTool(telefone, nome, args, estado) {
         subtotal: item.preco * qtd,
       });
 
-      // Adiciona cada extra detectado como item separado (busca no cardapio
-      // de adicionais). Se nao achar, ignora silenciosamente.
+      // Adiciona cada extra detectado como item separado — mas SO se o
+      // extra nao estiver ja no carrinho (evita duplicata quando Claude
+      // ja chamou adicionar_item pro extra separadamente). Dedupe por
+      // nome normalizado (case/acento insensivel).
       const extrasAdicionados = [];
       for (const extra of extrasDetectados.extras) {
         const itemExtra = await buscarAdicional(extra);
-        if (itemExtra) {
-          carrinho.push({
-            id: itemExtra.id, nome: itemExtra.nome, preco: itemExtra.preco, qtd: 1,
-            obs: '',
-            subtotal: itemExtra.preco,
-          });
-          extrasAdicionados.push(itemExtra.nome + ' (R$' + itemExtra.preco + ')');
-          console.log('[tools] extra auto-adicionado: ' + itemExtra.nome + ' (detectado em obs)');
+        if (!itemExtra) continue;
+        const nomeNormalizado = function (s) {
+          return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        };
+        const nomeExtra = nomeNormalizado(itemExtra.nome);
+        const jaTem = carrinho.some(function (c) { return nomeNormalizado(c.nome) === nomeExtra; });
+        if (jaTem) {
+          console.log('[tools] extra "' + itemExtra.nome + '" ja no carrinho — pulando (Claude ja adicionou)');
+          continue;
         }
+        carrinho.push({
+          id: itemExtra.id, nome: itemExtra.nome, preco: itemExtra.preco, qtd: 1,
+          obs: '',
+          subtotal: itemExtra.preco,
+        });
+        extrasAdicionados.push(itemExtra.nome + ' (R$' + itemExtra.preco + ')');
+        console.log('[tools] extra auto-adicionado: ' + itemExtra.nome + ' (detectado em obs)');
       }
 
       return {
