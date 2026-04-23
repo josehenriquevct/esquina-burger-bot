@@ -149,6 +149,59 @@ export async function analisarImagem(base64Img, mimetype) {
   }
 }
 
+// ── Curto-circuito de confirmacao ───────────────────────────────
+// Claude as vezes reapresenta resumo quando cliente diz "confirma" apos
+// ja ter visto um resumo. Quando o estado esta todo preenchido e o
+// cliente claramente confirmou, a gente finaliza direto.
+
+// Forma "curta" de confirmacao. Deliberadamente restrito — nao captura
+// frases longas que podem conter info extra (ex: "confirma com entrega
+// pra amanha" — isso precisa ir pro Claude porque tem requisito novo).
+var REGEX_CONFIRMACAO_CURTA = /^\s*(confirma(r|do|do sim)?|isso(\s*mesmo)?|pode(\s*ser|\s*confirmar|\s*sim|\s*finalizar)?|sim|ok|okay|beleza|certo|claro|perfeito|fechou?|fecha(r)?|finaliza(r)?|ta\s*bom|tudo\s*certo|(eh|e)\s*isso|vai\s*sim|bora(\s*la)?|manda|manda\s*ver|pode\s*mandar|👍|✅)\s*[.!]*\s*$/i;
+
+function ehConfirmacaoCurta(texto) {
+  return REGEX_CONFIRMACAO_CURTA.test(String(texto || ''));
+}
+
+function estadoProntoParaFinalizar(estado) {
+  if (!estado || !Array.isArray(estado.carrinho) || estado.carrinho.length === 0) return false;
+  var d = estado.dados || {};
+  if (!d.nome && !d.nome_whatsapp) return false;
+  if (!d.tipo) return false;
+  if (!d.pagamento) return false;
+  if (d.tipo === 'delivery') {
+    var loc = d.localizacao;
+    var temEnd = !!d.endereco || (loc && loc.lat && loc.lng);
+    if (!temEnd) return false;
+  }
+  // Se esta alterando pedido existente, nao curto-circuita — deixa Claude
+  // lidar (pode precisar confirmar as mudancas explicitamente).
+  if (estado.pedidoKeyExistente) return false;
+  return true;
+}
+
+// Monta a mensagem final de confirmacao do pedido no mesmo formato que
+// Claude geraria — codigo + total + aviso por tipo.
+function gerarMensagemFinalizacao(rFinal, estado) {
+  var codigo = rFinal.codigoConfirmacao || '????';
+  var totalStr = 'R$ ' + Number(rFinal.total || 0).toFixed(2).replace('.', ',');
+  var tipo = (estado.dados && estado.dados.tipo) || 'retirada';
+  var pixEnviado = rFinal.pix_enviado;
+  var rastreioLink = rFinal.rastreioLink || '';
+  var linhas = [];
+  linhas.push('Pedido confirmado! Código: *' + codigo + '*. Total: *' + totalStr + '*.');
+  if (pixEnviado) {
+    linhas.push('O QR Code PIX e o código copia-cola já foram enviados pra você — é só escanear ou copiar e colar no app do banco.');
+  }
+  if (tipo === 'delivery') {
+    linhas.push('Chega em 30 a 40 min — te aviso quando sair pra entrega! 🛵');
+    if (rastreioLink) linhas.push('Rastreio: ' + rastreioLink);
+  } else {
+    linhas.push('Assim que ficar pronto eu te aviso! 🍔');
+  }
+  return linhas.join('\n\n');
+}
+
 // ── Contexto de estado (carrinho + pedido parcial) ─────────────
 // Injetado num bloco separado do system prompt (sem cache_control) pra
 // que Claude sempre saiba o que tem no carrinho e o que o cliente ja
@@ -323,6 +376,28 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     } catch (e) {
       console.error('Erro ao analisar imagem:', e.message);
       texto = texto + '\n[Cliente enviou uma imagem mas a analise falhou. Peca pra reenviar ou descrever por texto. NAO confirme pagamento sem ver o comprovante.]';
+    }
+  }
+
+  // ── Curto-circuito de confirmacao ───────────────────────────────
+  // Se o cliente disser uma confirmacao clara ("confirma", "pode", "ok"...)
+  // e o estado esta completo (itens + nome + tipo + pagto + endereco se
+  // delivery), finaliza DIRETO sem passar pelo Claude. Claude as vezes
+  // insiste em perguntar "confirma?" de novo mesmo com o estado pronto —
+  // esse atalho evita esse bug e economiza 1 chamada Claude.
+  if (ehConfirmacaoCurta(texto) && estadoProntoParaFinalizar(estado)) {
+    console.log('Curto-circuito de confirmacao: finalizando direto para ' + telefone);
+    try {
+      var rFinal = await executarTool(telefone, 'finalizar_pedido', {}, estado);
+      if (rFinal && rFinal.sucesso) {
+        estado._limpar = true;
+        await limparEstado(telefone);
+        var msgFinal = gerarMensagemFinalizacao(rFinal, estado);
+        return msgFinal;
+      }
+    } catch (eCurto) {
+      console.error('Curto-circuito falhou, caindo no fluxo normal:', eCurto.message);
+      // Continua o fluxo normal com o Claude
     }
   }
 
