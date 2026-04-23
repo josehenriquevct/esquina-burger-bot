@@ -173,10 +173,11 @@ cardapio + '\n' +
 '- Antes de finalizar: pode cancelar, use cancelar_pedido\n' +
 '- Depois de finalizado: "Seu pedido ja foi pra cozinha e ta sendo preparado! Nao consigo cancelar."\n' +
 '\n' +
-'ALTERACAO DE PEDIDO:\n' +
+'ALTERACAO DE PEDIDO (IMPORTANTE — NAO TRANSFERIR PRA HUMANO):\n' +
 '- Se o cliente JA FINALIZOU um pedido nos ultimos minutos e quer alterar (adicionar, remover, trocar item, mudar pagamento, etc), chame PRIMEIRO a tool carregar_pedido_recente — ela traz o pedido pro carrinho.\n' +
 '- Depois use adicionar_item / remover_item normalmente e chame finalizar_pedido. O sistema vai ATUALIZAR o pedido existente no PDV, sem duplicar.\n' +
-'- Se a tool retornar que o pedido ja esta sendo preparado, avise o cliente e use transferir_humano.\n' +
+'- NUNCA chame transferir_humano pra alteracao simples de pedido. So use transferir_humano se carregar_pedido_recente retornar que o pedido ja esta "sendo preparado" (status != aguardando). Alterar pedido e sua funcao, nao de humano.\n' +
+'- Gatilhos tipicos pra alteracao: "adiciona mais X no meu pedido", "muda o pagamento", "esqueci de pedir X", "tira X do pedido", "no pedido que acabei de fazer", "no meu ultimo pedido".\n' +
 '\n' +
 'REGRAS:\n' +
 '- SEMPRE escreva uma mensagem de texto no final do turno. Mesmo depois de chamar tool, escreva UMA frase curta confirmando (ex: "Anotei!", "Mais alguma coisa?", "Veja só. Qual voce quer?"). NAO termine o turno em silencio apos uma tool — o cliente precisa ver confirmacao. EXCECOES: enviar_foto_cardapio (a legenda da foto ja cobre) e finalizar_pedido (a mensagem final ja e cobrada no passo 11).\n' +
@@ -190,6 +191,7 @@ cardapio + '\n' +
 '- Mensagens curtas e diretas SEMPRE\n' +
 '- CORRIGIR ITEM: se o cliente corrigiu o que pediu ("na verdade quero X", "era Y"), PRIMEIRO use remover_item pra tirar o antigo, DEPOIS adicionar_item o novo. Nao some os dois.\n' +
 '- MENSAGEM CURTA do cliente ("sim", "pode", "ok", "isso"): entenda pelo contexto e prossiga (finalize_pedido se o pedido ta completo, confirme se tava perguntando algo).\n' +
+'- "CONFIRMA" APOS RESUMO: Se voce JA apresentou um resumo do pedido e cliente responder "confirma", "isso", "pode", "sim", "ok", "beleza" — chame finalizar_pedido IMEDIATAMENTE. NAO apresente o resumo de novo, NAO pergunte mais nada. Apenas finalize.\n' +
 '- NOME do cliente: se o cliente responder uma mensagem curta com uma ou duas palavras capitalizadas (ex: "Maria", "Joao Silva"), esse E o nome — salve e siga o fluxo.\n' +
 '- CONFIRMAR antes de finalizar: SEMPRE mostre o resumo (itens com precos, total, tipo, pagamento) ANTES de chamar finalizar_pedido. Nao finalize surpresa.\n' +
 (process.env.PROMPT_APELIDOS_LANCHES
