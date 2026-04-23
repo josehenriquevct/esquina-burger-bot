@@ -329,11 +329,21 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
         var itensFmt = (pAberto.itens || []).map(function (i) {
           return '  - ' + i.qtd + 'x ' + i.nome + (i.obs ? ' (' + i.obs + ')' : '');
         }).join('\n');
-        pedidoAbertoHint = 'PEDIDO ABERTO RECENTE DESTE CLIENTE (feito ha poucos minutos, AINDA nao aceito pela cozinha — pode ser alterado):\n' +
+        pedidoAbertoHint = '⚠️ ATENCAO CRITICA: CLIENTE TEM PEDIDO ABERTO RECENTE — AINDA NAO ACEITO PELA COZINHA — PODE SER ALTERADO:\n' +
           'Codigo: ' + (pAberto.codigoConfirmacao || '(nao setado)') + '\n' +
+          'Status: aguardando (NAO esta em preparo, pode alterar)\n' +
           'Itens:\n' + itensFmt + '\n' +
           'Total atual: R$ ' + Number(pAberto.total || 0).toFixed(2).replace('.', ',') + '\n' +
-          'Se o cliente pedir pra alterar ("adiciona mais X", "tira o Y", "muda pagamento", "esqueci de pedir Z", "no pedido que acabei de fazer"), SUA PRIMEIRA ACAO DEVE SER carregar_pedido_recente — NAO invente que "ja esta em preparo". O pedido AINDA pode ser alterado.';
+          '\n' +
+          'REGRA ABSOLUTA: se o cliente pedir QUALQUER alteracao ("adiciona mais X", "tira Y", "muda pagamento", "esqueci de X", "no pedido que acabei de fazer", "no meu ultimo pedido"):\n' +
+          '1. Sua PRIMEIRA tool call OBRIGATORIA e carregar_pedido_recente. Nao responda nada antes.\n' +
+          '2. Depois use adicionar_item/remover_item conforme pedido.\n' +
+          '3. Chame finalizar_pedido (vai ATUALIZAR, nao duplicar).\n' +
+          '4. Confirme ao cliente o NOVO total.\n' +
+          'NUNCA, JAMAIS responda "esta em preparo" ou "nao da pra alterar". O status e "aguardando", voce pode alterar. So transfira pra humano se carregar_pedido_recente retornar erro.';
+        console.log('Hint injetado pra ' + telefone + ': pedido ' + pAberto.codigoConfirmacao + ' aberto recentemente');
+      } else if (pAberto) {
+        console.log('Pedido aberto encontrado mas status=' + pAberto.status + ' — nao injetando hint');
       }
     } catch (ePed) {
       console.warn('Erro ao buscar pedido aberto:', ePed.message);
