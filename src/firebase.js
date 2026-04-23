@@ -235,7 +235,7 @@ export async function getConfigLoja() {
 
     return {
       entrega_ativa: botCfg.entregaAtiva !== false,
-      taxa_entrega: entregaCfg.taxa || 5,
+      taxa_entrega: entregaCfg.taxa || 3,
       horario_ativo: horarioAtivo,
       horario_abre: botCfg.horaAbertura || '',
       horario_fecha: botCfg.horaFechamento || '',

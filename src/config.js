@@ -21,7 +21,7 @@ export const config = {
     unidade: process.env.RESTAURANTE_UNIDADE || 'Vicentinopolis',
     endereco: process.env.ENDERECO_LOJA || 'Rua Principal, 123 - Vicentinopolis',
     horario: process.env.HORARIO_FUNCIONAMENTO || 'Terca a Domingo, 18h as 23h',
-    taxaEntrega: parseFloat(process.env.TAXA_ENTREGA || '5.00'),
+    taxaEntrega: parseFloat(process.env.TAXA_ENTREGA || '3.00'),
   },
 
   // Anthropic (Claude) — chat principal + tools + analise de imagem

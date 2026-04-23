@@ -261,7 +261,7 @@ function construirContextoEstado(estado) {
 // Resumo do pedido para exibir ao cliente quando Claude nao gera texto
 // depois de ver_pedido_atual. Inclui itens com preco, total e dados
 // parciais — tudo que um "Confirma?" precisa pra fechar o pedido.
-function construirResumoParaCliente(estado) {
+async function construirResumoParaCliente(estado) {
   if (!estado || !Array.isArray(estado.carrinho) || estado.carrinho.length === 0) return '';
   var linhas = ['Seu pedido:'];
   for (var i = 0; i < estado.carrinho.length; i++) {
@@ -272,7 +272,21 @@ function construirResumoParaCliente(estado) {
   }
   var subtotal = totalCarrinho(estado);
   var d = estado.dados || {};
-  var taxa = d.tipo === 'delivery' ? parseFloat(config.restaurante.taxaEntrega || '0') : 0;
+  // Taxa de entrega: prioriza Firebase (gerenciavel no PDV), senao cai
+  // na env var. Mesma logica da taxaEntrega() em tools.js.
+  var taxa = 0;
+  if (d.tipo === 'delivery') {
+    try {
+      var cfgLoja = await getConfigLoja();
+      if (cfgLoja && typeof cfgLoja.taxa_entrega === 'number') {
+        taxa = cfgLoja.taxa_entrega;
+      } else {
+        taxa = parseFloat(config.restaurante.taxaEntrega || '0');
+      }
+    } catch (e) {
+      taxa = parseFloat(config.restaurante.taxaEntrega || '0');
+    }
+  }
   var total = subtotal + taxa;
   if (taxa) linhas.push('- Taxa de entrega: R$ ' + taxa.toFixed(2).replace('.', ','));
   linhas.push('Total: R$ ' + total.toFixed(2).replace('.', ','));
@@ -611,7 +625,7 @@ async function tratarRespostaVazia(telefone, texto, ultimaToolUsada, estado, per
     // Fallback com resumo real — se Claude pulou o texto apos ver_pedido_atual,
     // a gente mesmo gera o resumo com os itens e total. Assim no proximo turno
     // cliente sabe exatamente o que tem e "confirma" vira um finalizar claro.
-    var resumo = construirResumoParaCliente(estado);
+    var resumo = await construirResumoParaCliente(estado);
     return resumo || 'Esse e o seu pedido. Confirma?';
   }
   if (ultimaToolUsada === 'salvar_cliente') return 'Anotei! Agora me diz se e entrega, retirada ou salao.';
