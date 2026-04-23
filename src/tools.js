@@ -157,6 +157,36 @@ function normalizarQuantidade(valor) {
   return Math.min(50, Math.floor(n));
 }
 
+// Detecta pattern "X extra" / "com X extra" em observacoes do cliente
+// e converte em itens adicionais separados — garante que o preco do
+// extra seja cobrado, independente de Claude ter chamado a tool
+// adicionar_item pro adicional ou ter colocado so na obs.
+// Retorna { limpa: obs-sem-os-extras, extras: [nome1, nome2, ...] }.
+function detectarExtrasNaObs(obs) {
+  if (!obs) return { limpa: obs, extras: [] };
+  const extras = [];
+  const palavrasExtra = ['bacon', 'cheddar', 'muçarela', 'mucarela', 'mussarela', 'queijo', 'ovo', 'cebola', 'salada', 'molho'];
+  let limpa = obs;
+  for (const pal of palavrasExtra) {
+    const re = new RegExp('(?:com\\s+)?\\b' + pal + '\\b\\s+(?:extra|a\\s+mais|adicional)|\\bmais\\s+' + pal + '\\b', 'gi');
+    if (re.test(limpa)) {
+      extras.push(pal);
+      limpa = limpa.replace(re, '');
+    }
+  }
+  // Limpa artefatos: conjunçoes/pontuacao sobrando ("e", "ou", ", ,")
+  limpa = limpa
+    .replace(/\s+e\s+(?=\s*[,.;]|$)/gi, ' ')
+    .replace(/\s+(?:e|ou)\s+/gi, ' ')
+    .replace(/,\s*,/g, ',')
+    .replace(/[,;]\s*$/g, '')
+    .replace(/^\s*[,;e]\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (/^(e|ou|,|;|\s)*$/i.test(limpa)) limpa = '';
+  return { limpa: limpa, extras: extras };
+}
+
 // Taxa de entrega: prioriza config do Firebase, senão env
 async function taxaEntrega() {
   try {
@@ -218,23 +248,50 @@ export async function executarTool(telefone, nome, args, estado) {
     case 'adicionar_item': {
       // Procura primeiro no cardápio principal, depois nos adicionais
       let item = await buscarItem(args.nome_ou_id);
-      let origem = 'cardapio';
-      if (!item) { item = await buscarAdicional(args.nome_ou_id); origem = 'adicional'; }
-      console.log('[tools] adicionar_item query="' + args.nome_ou_id + '" → ' + (item ? origem + ':' + item.nome + ' (R$' + item.preco + ')' : 'NAO ENCONTRADO'));
+      if (!item) item = await buscarAdicional(args.nome_ou_id);
       if (!item) return { sucesso: false, erro: `Item "${args.nome_ou_id}" não encontrado no cardápio.` };
 
       const qtd = normalizarQuantidade(args.quantidade);
-      const obs = args.observacao ? String(args.observacao).slice(0, 200) : '';
+      let obs = args.observacao ? String(args.observacao).slice(0, 200) : '';
+
+      // Detecta "X extra" na observacao e converte em item adicional separado.
+      // Claude as vezes coloca "com bacon extra" na obs em vez de chamar
+      // adicionar_item separado pro adicional. Aqui a gente garante que o
+      // preco do extra seja cobrado corretamente, independente do que Claude
+      // decidiu fazer.
+      const extrasDetectados = detectarExtrasNaObs(obs);
+      if (extrasDetectados.limpa !== obs) {
+        obs = extrasDetectados.limpa;
+      }
+
       carrinho.push({
         id: item.id, nome: item.nome, preco: item.preco, qtd,
         obs,
         subtotal: item.preco * qtd,
       });
+
+      // Adiciona cada extra detectado como item separado (busca no cardapio
+      // de adicionais). Se nao achar, ignora silenciosamente.
+      const extrasAdicionados = [];
+      for (const extra of extrasDetectados.extras) {
+        const itemExtra = await buscarAdicional(extra);
+        if (itemExtra) {
+          carrinho.push({
+            id: itemExtra.id, nome: itemExtra.nome, preco: itemExtra.preco, qtd: 1,
+            obs: '',
+            subtotal: itemExtra.preco,
+          });
+          extrasAdicionados.push(itemExtra.nome + ' (R$' + itemExtra.preco + ')');
+          console.log('[tools] extra auto-adicionado: ' + itemExtra.nome + ' (detectado em obs)');
+        }
+      }
+
       return {
         sucesso: true,
         adicionado: `${qtd}x ${item.nome}`,
         preco_unitario: item.preco,
         subtotal_item: item.preco * qtd,
+        extras_auto_adicionados: extrasAdicionados,
         carrinho_total: totalCarrinho(estado),
       };
     }
