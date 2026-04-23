@@ -377,12 +377,26 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
 }
 
 // ── Fallbacks heuristicos quando Claude retorna texto vazio ──────
-// Muito raro com Claude (mais comum com Gemini), mas mantido por seguranca.
+// Cobre 2 casos: (1) Claude chamou tool e terminou sem texto — resposta
+// por tool; (2) Claude nao entendeu o input do cliente — fallback por
+// padrao do texto (sim/nao/nome/cardapio).
 async function tratarRespostaVazia(telefone, texto, ultimaToolUsada, estado, persistir) {
   await persistir();
 
+  // Respostas por tool (Claude as vezes termina sem texto apos executar tool)
   if (ultimaToolUsada === 'enviar_foto_cardapio') return '';
   if (ultimaToolUsada === 'finalizar_pedido') return 'Prontinho, pedido na cozinha!';
+  if (ultimaToolUsada === 'adicionar_item') return 'Anotei! Mais alguma coisa?';
+  if (ultimaToolUsada === 'remover_item') return 'Removi! Mais alguma coisa?';
+  if (ultimaToolUsada === 'cancelar_pedido') return 'Cancelei! Se quiser comecar de novo, e so pedir.';
+  if (ultimaToolUsada === 'ver_cardapio_categoria') return 'Me diz qual voce quer!';
+  if (ultimaToolUsada === 'ver_pedido_atual') return 'Esse e o seu pedido. Confirma?';
+  if (ultimaToolUsada === 'salvar_cliente') return 'Anotei! Agora me diz se e entrega, retirada ou salao.';
+  if (ultimaToolUsada === 'definir_tipo_pedido') return 'Anotei! Como prefere pagar — pix, cartao ou dinheiro?';
+  if (ultimaToolUsada === 'definir_pagamento') return 'Anotei! Vou finalizar, confirma pra eu mandar pra cozinha?';
+  if (ultimaToolUsada === 'carregar_pedido_recente') return 'Peguei seu pedido aqui. O que voce quer alterar?';
+  if (ultimaToolUsada === 'agendar_pedido') return 'Agendado! O que mais voce quer pedir?';
+  if (ultimaToolUsada === 'transferir_humano') return 'Ja chamei um atendente. Em instantes alguem te responde.';
 
   var textoLower = String(texto || '').toLowerCase().trim();
   // Fallback cardapio — cliente pediu, Claude travou: manda a foto direto
