@@ -149,6 +149,40 @@ export async function analisarImagem(base64Img, mimetype) {
   }
 }
 
+// ── Contexto de estado (carrinho + pedido parcial) ─────────────
+// Injetado num bloco separado do system prompt (sem cache_control) pra
+// que Claude sempre saiba o que tem no carrinho e o que o cliente ja
+// informou. Lista QTD + NOME dos itens — NAO inclui total, pra forcar
+// Claude a chamar ver_pedido_atual quando precisar falar valor.
+function construirContextoEstado(estado) {
+  if (!estado) return '';
+  var linhas = [];
+  var carrinho = estado.carrinho || [];
+  if (carrinho.length > 0) {
+    linhas.push('ESTADO ATUAL DO PEDIDO (voce tem acesso real-time a isso, nao precisa chamar ver_pedido_atual so pra lembrar):');
+    linhas.push('Itens no carrinho:');
+    for (var i = 0; i < carrinho.length; i++) {
+      var it = carrinho[i];
+      var obs = it.obs ? ' (' + it.obs + ')' : '';
+      linhas.push('  - ' + it.qtd + 'x ' + it.nome + obs);
+    }
+  } else {
+    linhas.push('ESTADO ATUAL: carrinho vazio.');
+  }
+  var d = estado.dados || {};
+  var parciais = [];
+  if (d.nome) parciais.push('nome=' + d.nome);
+  if (d.tipo) parciais.push('tipo=' + d.tipo);
+  if (d.pagamento) parciais.push('pagamento=' + d.pagamento + (d.troco ? ' (troco pra ' + d.troco + ')' : ''));
+  if (d.endereco) parciais.push('endereco=' + d.endereco);
+  if (d.localizacao && d.localizacao.lat) parciais.push('localizacao=GPS');
+  if (d.agendadoPara) parciais.push('agendado_para=' + d.agendadoPara);
+  if (parciais.length) linhas.push('Dados ja coletados: ' + parciais.join('; '));
+  if (estado.pedidoKeyExistente) linhas.push('ATENCAO: cliente esta ALTERANDO um pedido existente (id=' + estado.pedidoKeyExistente + '). Ao chamar finalizar_pedido, o sistema atualiza o pedido em vez de duplicar.');
+  linhas.push('Lembre: para INFORMAR o valor total ao cliente, ainda use ver_pedido_atual (tem o calculo exato com taxa de entrega).');
+  return linhas.join('\n');
+}
+
 // ── Helpers de historico ───────────────────────────────────────
 
 // Converte o historico do Firebase em messages no formato Anthropic.
@@ -244,12 +278,20 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
   var historicoRaw = (conversaAtual && conversaAtual.mensagens) ? conversaAtual.mensagens.slice(-20) : [];
   var messages = construirHistorico(historicoRaw, texto);
 
-  // System prompt com cache_control — msgs sucessivas do mesmo cliente
-  // no mesmo ~5min vao reusar o prompt cacheado (~90% mais barato).
+  // System prompt em 2 blocos: (1) estavel, com cache_control — reusa
+  // prefixo em msgs sucessivas do mesmo cliente (~90% mais barato);
+  // (2) contexto atual do pedido (carrinho, tipo, pagto), volatil,
+  // SEM cache pra nao invalidar o prefixo. Isso garante que Claude
+  // sempre sabe o estado do carrinho sem precisar chamar ver_pedido_atual
+  // so pra se lembrar.
   var sysPrompt = await systemPrompt(configLoja);
   var systemBlocks = [
     { type: 'text', text: sysPrompt, cache_control: { type: 'ephemeral' } },
   ];
+  var contextoEstado = construirContextoEstado(estado);
+  if (contextoEstado) {
+    systemBlocks.push({ type: 'text', text: contextoEstado });
+  }
 
   var persistir = async function () {
     if (estado._limpar) {

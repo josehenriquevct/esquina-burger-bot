@@ -306,9 +306,18 @@ router.post('/test', authMiddleware, async function(req, res) {
   var pushName = req.body && req.body.pushName;
   if (!telefone || !texto) return res.status(400).json({ error: 'telefone e texto obrigatorios' });
   try {
-    var resposta = await processarMensagem(telefone, sanitizarMensagem(texto), pushName);
+    // Espelha o fluxo do /webhook real: salva msg do cliente antes de
+    // processar, e a resposta depois. Sem isso, turnos sequenciais em
+    // teste perdem contexto porque o historico nunca e gravado.
+    var txtLimpo = sanitizarMensagem(texto);
+    await adicionarMensagem(telefone, { role: 'user', texto: txtLimpo, pushName: pushName });
+    var resposta = await processarMensagem(telefone, txtLimpo, pushName);
+    if (resposta) {
+      await adicionarMensagem(telefone, { role: 'assistant', texto: resposta });
+    }
     res.json({ resposta: resposta });
   } catch (e) {
+    console.error('Erro /test:', e.message);
     res.status(500).json({ error: 'Erro interno' });
   }
 });
