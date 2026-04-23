@@ -16,133 +16,134 @@ import { gerarPixQr } from './pix.js';
 
 // ── Declarações das tools (formato Gemini) ─────────────────────
 
-export const TOOL_DECLARATIONS = [{
-  functionDeclarations: [
-    {
-      name: 'ver_cardapio_categoria',
-      description: 'Retorna os itens de uma categoria do cardápio.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          categoria: {
-            type: 'STRING',
-            enum: ['combos', 'burgers', 'porcoes', 'bebidas', 'extras'],
-            description: 'Categoria do cardápio',
-          },
+// Formato Anthropic: cada tool é um objeto com input_schema (JSON Schema
+// com tipos em minusculo). Diferente de Gemini que agrupa tudo em
+// functionDeclarations e usa tipos em maiusculo.
+export const TOOL_DECLARATIONS = [
+  {
+    name: 'ver_cardapio_categoria',
+    description: 'Retorna os itens de uma categoria do cardápio.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        categoria: {
+          type: 'string',
+          enum: ['combos', 'burgers', 'porcoes', 'bebidas', 'extras'],
+          description: 'Categoria do cardápio',
         },
-        required: ['categoria'],
       },
+      required: ['categoria'],
     },
-    {
-      name: 'enviar_foto_cardapio',
-      description: 'Envia a foto/imagem do cardápio completo para o cliente pelo WhatsApp. Use SEMPRE que o cliente pedir para ver o cardápio ou menu.',
-      parameters: { type: 'OBJECT', properties: {} },
-    },
-    {
-      name: 'adicionar_item',
-      description: 'Adiciona um item do cardápio ao pedido atual. Funciona com itens normais E com adicionais/extras (ex: bacon extra, ovo extra).',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          nome_ou_id: { type: 'STRING', description: 'Nome do item ou ID numérico' },
-          quantidade: { type: 'NUMBER', description: 'Quantidade' },
-          observacao: { type: 'STRING', description: 'Observação opcional (ex: "sem cebola")' },
-        },
-        required: ['nome_ou_id', 'quantidade'],
+  },
+  {
+    name: 'enviar_foto_cardapio',
+    description: 'Envia a foto/imagem do cardápio completo para o cliente pelo WhatsApp. Use SEMPRE que o cliente pedir para ver o cardápio ou menu.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'adicionar_item',
+    description: 'Adiciona um item do cardápio ao pedido atual. Funciona com itens normais E com adicionais/extras (ex: bacon extra, ovo extra).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        nome_ou_id: { type: 'string', description: 'Nome do item ou ID numérico' },
+        quantidade: { type: 'number', description: 'Quantidade' },
+        observacao: { type: 'string', description: 'Observação opcional (ex: "sem cebola")' },
       },
+      required: ['nome_ou_id', 'quantidade'],
     },
-    {
-      name: 'remover_item',
-      description: 'Remove um item do pedido atual pelo nome (remove a ocorrência mais recente com esse nome).',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          nome: { type: 'STRING', description: 'Nome do item a remover' },
-        },
-        required: ['nome'],
+  },
+  {
+    name: 'remover_item',
+    description: 'Remove um item do pedido atual pelo nome (remove a ocorrência mais recente com esse nome). Se o cliente pediu pra remover "o segundo duplo blade", passe "duplo blade" como nome — NUNCA ordinais como "segundo" ou "primeiro".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        nome: { type: 'string', description: 'Nome do item a remover (parte do nome do item do cardápio, sem ordinais)' },
       },
+      required: ['nome'],
     },
-    {
-      name: 'ver_pedido_atual',
-      description: 'Retorna o carrinho atual com itens, quantidades e total.',
-      parameters: { type: 'OBJECT', properties: {} },
-    },
-    {
-      name: 'salvar_cliente',
-      description: 'Salva ou atualiza dados do cliente. Use assim que tiver o nome.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          nome: { type: 'STRING' },
-          endereco: { type: 'STRING' },
-          bairro: { type: 'STRING' },
-          referencia: { type: 'STRING' },
-        },
-        required: ['nome'],
+  },
+  {
+    name: 'ver_pedido_atual',
+    description: 'Retorna o carrinho atual com itens, quantidades e total. Use SEMPRE antes de informar o valor do pedido para o cliente.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'salvar_cliente',
+    description: 'Salva ou atualiza dados do cliente. Use assim que tiver o nome.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        nome: { type: 'string' },
+        endereco: { type: 'string' },
+        bairro: { type: 'string' },
+        referencia: { type: 'string' },
       },
+      required: ['nome'],
     },
-    {
-      name: 'definir_tipo_pedido',
-      description: 'Define: salao, delivery ou retirada.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          tipo: { type: 'STRING', enum: ['salao', 'delivery', 'retirada'] },
-        },
-        required: ['tipo'],
+  },
+  {
+    name: 'definir_tipo_pedido',
+    description: 'Define: salao, delivery ou retirada. CHAME IMEDIATAMENTE quando o cliente indicar o tipo, mesmo que misturado com outras informações na mesma mensagem.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tipo: { type: 'string', enum: ['salao', 'delivery', 'retirada'] },
       },
+      required: ['tipo'],
     },
-    {
-      name: 'definir_pagamento',
-      description: 'Define a forma de pagamento.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          pagamento: { type: 'STRING', enum: ['pix', 'cartao', 'dinheiro'] },
-          troco: { type: 'STRING', description: 'Se dinheiro, valor para troco' },
-        },
-        required: ['pagamento'],
+  },
+  {
+    name: 'definir_pagamento',
+    description: 'Define a forma de pagamento. CHAME IMEDIATAMENTE quando o cliente indicar o pagamento, mesmo que misturado com outras informações na mesma mensagem.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pagamento: { type: 'string', enum: ['pix', 'cartao', 'dinheiro'] },
+        troco: { type: 'string', description: 'Se dinheiro, valor para troco' },
       },
+      required: ['pagamento'],
     },
-    {
-      name: 'finalizar_pedido',
-      description: 'Finaliza o pedido e envia para a cozinha. Requer: itens no carrinho, nome, tipo, pagamento, e endereço (se delivery). Se houver pedido aberto recente (alteração), o sistema ATUALIZA em vez de criar duplicado.',
-      parameters: { type: 'OBJECT', properties: {} },
-    },
-    {
-      name: 'cancelar_pedido',
-      description: 'Limpa o carrinho e dados parciais da sessão atual.',
-      parameters: { type: 'OBJECT', properties: {} },
-    },
-    {
-      name: 'carregar_pedido_recente',
-      description: 'Carrega no carrinho o último pedido do cliente (se ainda não aceito pelo PDV) para permitir ADICIONAR/REMOVER/ALTERAR itens. Use SEMPRE que o cliente quiser alterar um pedido que acabou de fazer. Depois de alterar, chame finalizar_pedido que o sistema ATUALIZA o pedido existente em vez de criar um novo.',
-      parameters: { type: 'OBJECT', properties: {} },
-    },
-    {
-      name: 'agendar_pedido',
-      description: 'Marca o pedido para sair/entregar em um horário específico (agendamento). Use quando a loja ainda não abriu e o cliente aceita esperar, ou quando quer pedir pra um horário futuro.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          horario: { type: 'STRING', description: 'Horário desejado (HH:MM formato 24h, ex: "18:30" ou "20:00")' },
-        },
-        required: ['horario'],
+  },
+  {
+    name: 'finalizar_pedido',
+    description: 'Finaliza o pedido e envia para a cozinha. Requer: itens no carrinho, nome, tipo, pagamento, e endereço (se delivery). Se houver pedido aberto recente (alteração), o sistema ATUALIZA em vez de criar duplicado.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'cancelar_pedido',
+    description: 'Limpa o carrinho e dados parciais da sessão atual.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'carregar_pedido_recente',
+    description: 'Carrega no carrinho o último pedido do cliente (se ainda não aceito pelo PDV) para permitir ADICIONAR/REMOVER/ALTERAR itens. Use SEMPRE que o cliente quiser alterar um pedido que acabou de fazer. Depois de alterar, chame finalizar_pedido que o sistema ATUALIZA o pedido existente em vez de criar um novo.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'agendar_pedido',
+    description: 'Marca o pedido para sair/entregar em um horário específico (agendamento). Use quando a loja ainda não abriu e o cliente aceita esperar, ou quando quer pedir pra um horário futuro.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        horario: { type: 'string', description: 'Horário desejado (HH:MM formato 24h, ex: "18:30" ou "20:00")' },
       },
+      required: ['horario'],
     },
-    {
-      name: 'transferir_humano',
-      description: 'Transfere para atendente humano. Use em reclamações ou pedido explícito.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          motivo: { type: 'STRING' },
-        },
-        required: ['motivo'],
+  },
+  {
+    name: 'transferir_humano',
+    description: 'Transfere para atendente humano. Use em reclamações ou pedido explícito.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        motivo: { type: 'string' },
       },
+      required: ['motivo'],
     },
-  ],
-}];
+  },
+];
 
 const PAGAMENTOS_VALIDOS = ['pix', 'cartao', 'dinheiro'];
 const TIPOS_VALIDOS = ['salao', 'delivery', 'retirada'];

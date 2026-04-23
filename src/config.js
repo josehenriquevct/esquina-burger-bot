@@ -24,12 +24,19 @@ export const config = {
     taxaEntrega: parseFloat(process.env.TAXA_ENTREGA || '5.00'),
   },
 
-  // Gemini
-  // gemini-2.0-flash foi descontinuado pra novos projetos (404). Entre os
-  // modelos com acesso garantido: 2.5-flash-lite tem free tier generoso e
-  // roda bem function calling; 2.5-flash tem qualidade superior mas apenas
-  // ~20 req/dia sem billing. Usamos lite como principal e flash como
-  // fallback automatico (em caso de 403/429).
+  // Anthropic (Claude) — chat principal + tools + analise de imagem
+  // Claude tem function calling mais confiavel que Gemini e segue prompt
+  // melhor. Haiku 4.5 e o mais barato com qualidade suficiente pra bot de
+  // atendimento. Fallback pra Sonnet 4.6 em caso de 429.
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    model: process.env.CLAUDE_MODEL || 'claude-haiku-4-5',
+    modeloFallback: process.env.CLAUDE_MODEL_FALLBACK || 'claude-sonnet-4-6',
+  },
+
+  // Gemini — usado APENAS pra transcricao de audio (Claude nao suporta
+  // audio como input). 2.5-flash-lite tem free tier generoso, suficiente
+  // para o volume esperado de audios.
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
     model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
@@ -98,7 +105,8 @@ export function validarConfig() {
   const erros = [];
   const avisos = [];
 
-  if (!config.gemini.apiKey) erros.push('GEMINI_API_KEY nao configurada');
+  if (!config.anthropic.apiKey) erros.push('ANTHROPIC_API_KEY nao configurada');
+  if (!config.gemini.apiKey) erros.push('GEMINI_API_KEY nao configurada (necessaria pra transcricao de audio)');
   if (config.gemini.model === 'gemini-2.0-flash' || config.gemini.modeloFallback === 'gemini-2.0-flash') {
     avisos.push('gemini-2.0-flash foi descontinuado pra novos projetos (404). Use gemini-2.5-flash-lite ou gemini-2.5-flash.');
   }
