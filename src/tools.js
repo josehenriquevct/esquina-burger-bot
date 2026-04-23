@@ -218,7 +218,9 @@ export async function executarTool(telefone, nome, args, estado) {
     case 'adicionar_item': {
       // Procura primeiro no cardápio principal, depois nos adicionais
       let item = await buscarItem(args.nome_ou_id);
-      if (!item) item = await buscarAdicional(args.nome_ou_id);
+      let origem = 'cardapio';
+      if (!item) { item = await buscarAdicional(args.nome_ou_id); origem = 'adicional'; }
+      console.log('[tools] adicionar_item query="' + args.nome_ou_id + '" → ' + (item ? origem + ':' + item.nome + ' (R$' + item.preco + ')' : 'NAO ENCONTRADO'));
       if (!item) return { sucesso: false, erro: `Item "${args.nome_ou_id}" não encontrado no cardápio.` };
 
       const qtd = normalizarQuantidade(args.quantidade);
