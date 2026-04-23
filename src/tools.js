@@ -191,20 +191,76 @@ function extraFoiAutoAdicionado(telefone, nomeItem) {
 // Retorna { limpa: obs-sem-os-extras, extras: [nome1, nome2, ...] }.
 function detectarExtrasNaObs(obs) {
   if (!obs) return { limpa: obs, extras: [] };
+  // Lista alinhada com o cardapio de adicionais (Firebase bot_config/cardapio)
+  const palavrasExtra = [
+    'bacon', 'cheddar', 'muçarela', 'mucarela', 'mussarela', 'queijo',
+    'ovo', 'cebola', 'salada', 'molho', 'alface', 'tomate',
+  ];
+  const normaliza = function (s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  };
+  const setExtras = new Set(palavrasExtra.map(normaliza));
+  const conectores = new Set(['com', 'e', 'ou']);
+  const NEGACAO = new Set(['sem', 'tira', 'tirar', 'retira']);
+  const MAX_LOOKBACK = 5;
+
   const extras = [];
-  const palavrasExtra = ['bacon', 'cheddar', 'muçarela', 'mucarela', 'mussarela', 'queijo', 'ovo', 'cebola', 'salada', 'molho'];
-  let limpa = obs;
+  const rangesParaRemover = []; // [[start, end], ...] pra limpar depois
+  const obsNorm = obs; // trabalhamos no texto original (regex case-insensitive)
+  const reKeyword = /\b(extra|adicional|adicionais|a\s+mais)\b/gi;
+
+  let m;
+  while ((m = reKeyword.exec(obsNorm)) !== null) {
+    const before = obsNorm.slice(0, m.index);
+    // Tokeniza o pedaço antes, guardando posicao
+    const tokens = [];
+    const reWord = /\b[\w\u00C0-\u024F]+\b/g;
+    let tm;
+    while ((tm = reWord.exec(before)) !== null) {
+      tokens.push({ word: tm[0], start: tm.index, end: tm.index + tm[0].length });
+    }
+    let startToRemove = m.index;
+    // Varre de tras pra frente, capturando adicionais e pulando conectores.
+    // Para quando encontra palavra desconhecida OU quando a palavra e
+    // precedida de negacao ("sem X" — nao e extra, e subtracao).
+    for (let i = tokens.length - 1; i >= 0 && tokens.length - i <= MAX_LOOKBACK; i--) {
+      const tok = normaliza(tokens[i].word);
+      if (conectores.has(tok)) { continue; }
+      if (setExtras.has(tok)) {
+        const prev = i > 0 ? normaliza(tokens[i - 1].word) : '';
+        if (NEGACAO.has(prev)) break; // "sem cebola" — nao e extra
+        if (!extras.includes(tok)) extras.push(tok);
+        startToRemove = tokens[i].start;
+      } else {
+        break; // palavra desconhecida, para
+      }
+    }
+    rangesParaRemover.push([startToRemove, m.index + m[0].length]);
+  }
+
+  // Tambem pattern "mais X" (ex: "mais bacon" sem "extra")
   for (const pal of palavrasExtra) {
-    const re = new RegExp('(?:com\\s+)?\\b' + pal + '\\b\\s+(?:extra|a\\s+mais|adicional)|\\bmais\\s+' + pal + '\\b', 'gi');
-    if (re.test(limpa)) {
-      extras.push(pal);
-      limpa = limpa.replace(re, '');
+    const palN = normaliza(pal);
+    const re = new RegExp('\\bmais\\s+' + palN + '\\b', 'gi');
+    let mm;
+    while ((mm = re.exec(normaliza(obsNorm))) !== null) {
+      if (!extras.includes(palN)) extras.push(palN);
+      rangesParaRemover.push([mm.index, mm.index + mm[0].length]);
     }
   }
-  // Limpa artefatos: conjunçoes/pontuacao sobrando ("e", "ou", ", ,")
+
+  // Remove os ranges (ordem reversa pra indices nao moverem)
+  rangesParaRemover.sort(function (a, b) { return b[0] - a[0]; });
+  let limpa = obsNorm;
+  for (const r of rangesParaRemover) {
+    limpa = limpa.slice(0, r[0]) + limpa.slice(r[1]);
+  }
+  // Cleanup de conjuncoes/pontuacao sobrando
   limpa = limpa
     .replace(/\s+e\s+(?=\s*[,.;]|$)/gi, ' ')
     .replace(/\s+(?:e|ou)\s+/gi, ' ')
+    .replace(/\bcom\s*$/gi, '')
+    .replace(/^\s*com\b/gi, '')
     .replace(/,\s*,/g, ',')
     .replace(/[,;]\s*$/g, '')
     .replace(/^\s*[,;e]\s*/gi, '')
@@ -332,14 +388,16 @@ export async function executarTool(telefone, nome, args, estado) {
           console.log('[tools] extra "' + itemExtra.nome + '" ja no carrinho — pulando (Claude ja adicionou)');
           continue;
         }
+        // Multiplica pela qtd do item principal (2 burger com bacon extra
+        // vira 2 bacons, cada burger ganha seu extra).
         carrinho.push({
-          id: itemExtra.id, nome: itemExtra.nome, preco: itemExtra.preco, qtd: 1,
+          id: itemExtra.id, nome: itemExtra.nome, preco: itemExtra.preco, qtd: qtd,
           obs: '',
-          subtotal: itemExtra.preco,
+          subtotal: itemExtra.preco * qtd,
         });
-        extrasAdicionados.push(itemExtra.nome + ' (R$' + itemExtra.preco + ')');
+        extrasAdicionados.push(qtd + 'x ' + itemExtra.nome + ' (R$ ' + (itemExtra.preco * qtd).toFixed(2).replace('.', ',') + ')');
         marcarExtraAuto(telefone, itemExtra.nome);
-        console.log('[tools] extra auto-adicionado: ' + itemExtra.nome + ' (detectado em obs)');
+        console.log('[tools] extra auto-adicionado: ' + qtd + 'x ' + itemExtra.nome);
       }
 
       return {
