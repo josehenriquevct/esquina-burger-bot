@@ -7,8 +7,8 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { config } from './config.js';
 import { systemPrompt, promptInterno } from './prompts.js';
 import { TOOL_DECLARATIONS, executarTool } from './tools.js';
-import { carregarEstado, salvarEstado, limparEstado, mergeClienteSalvo } from './state.js';
-import { getConversa, getConfigLoja, salvarConversa } from './firebase.js';
+import { carregarEstado, salvarEstado, limparEstado, mergeClienteSalvo, totalCarrinho } from './state.js';
+import { getConversa, getConfigLoja, salvarConversa, buscarPedidoAbertoDoCliente } from './firebase.js';
 
 var anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
 var MODELO = config.anthropic.model;
@@ -183,6 +183,35 @@ function construirContextoEstado(estado) {
   return linhas.join('\n');
 }
 
+// Resumo do pedido para exibir ao cliente quando Claude nao gera texto
+// depois de ver_pedido_atual. Inclui itens com preco, total e dados
+// parciais — tudo que um "Confirma?" precisa pra fechar o pedido.
+function construirResumoParaCliente(estado) {
+  if (!estado || !Array.isArray(estado.carrinho) || estado.carrinho.length === 0) return '';
+  var linhas = ['Seu pedido:'];
+  for (var i = 0; i < estado.carrinho.length; i++) {
+    var it = estado.carrinho[i];
+    var obs = it.obs ? ' (' + it.obs + ')' : '';
+    var preco = it.subtotal ? ' — R$ ' + Number(it.subtotal).toFixed(2).replace('.', ',') : '';
+    linhas.push('- ' + it.qtd + 'x ' + it.nome + obs + preco);
+  }
+  var subtotal = totalCarrinho(estado);
+  var d = estado.dados || {};
+  var taxa = d.tipo === 'delivery' ? parseFloat(config.restaurante.taxaEntrega || '0') : 0;
+  var total = subtotal + taxa;
+  if (taxa) linhas.push('- Taxa de entrega: R$ ' + taxa.toFixed(2).replace('.', ','));
+  linhas.push('Total: R$ ' + total.toFixed(2).replace('.', ','));
+  var info = [];
+  if (d.tipo) info.push('Tipo: ' + d.tipo);
+  if (d.pagamento) info.push('Pagamento: ' + d.pagamento + (d.troco ? ' (troco ' + d.troco + ')' : ''));
+  if (d.nome) info.push('Nome: ' + d.nome);
+  if (d.tipo === 'delivery' && d.endereco) info.push('Endereco: ' + d.endereco);
+  if (info.length) linhas.push(info.join(' | '));
+  linhas.push('');
+  linhas.push('Confirma?');
+  return linhas.join('\n');
+}
+
 // ── Helpers de historico ───────────────────────────────────────
 
 // Converte o historico do Firebase em messages no formato Anthropic.
@@ -288,7 +317,33 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
   var systemBlocks = [
     { type: 'text', text: sysPrompt, cache_control: { type: 'ephemeral' } },
   ];
+
+  // Se o estado esta vazio mas o cliente tem pedido aberto recente, busca e
+  // injeta a info no contexto — assim Claude sabe que pode alterar via
+  // carregar_pedido_recente em vez de responder "pedido em preparo" a seco.
+  var pedidoAbertoHint = '';
+  if ((!estado.carrinho || estado.carrinho.length === 0) && !estado.pedidoKeyExistente) {
+    try {
+      var pAberto = await buscarPedidoAbertoDoCliente(telefone, 30);
+      if (pAberto && pAberto.status === 'aguardando') {
+        var itensFmt = (pAberto.itens || []).map(function (i) {
+          return '  - ' + i.qtd + 'x ' + i.nome + (i.obs ? ' (' + i.obs + ')' : '');
+        }).join('\n');
+        pedidoAbertoHint = 'PEDIDO ABERTO RECENTE DESTE CLIENTE (feito ha poucos minutos, AINDA nao aceito pela cozinha — pode ser alterado):\n' +
+          'Codigo: ' + (pAberto.codigoConfirmacao || '(nao setado)') + '\n' +
+          'Itens:\n' + itensFmt + '\n' +
+          'Total atual: R$ ' + Number(pAberto.total || 0).toFixed(2).replace('.', ',') + '\n' +
+          'Se o cliente pedir pra alterar ("adiciona mais X", "tira o Y", "muda pagamento", "esqueci de pedir Z", "no pedido que acabei de fazer"), SUA PRIMEIRA ACAO DEVE SER carregar_pedido_recente — NAO invente que "ja esta em preparo". O pedido AINDA pode ser alterado.';
+      }
+    } catch (ePed) {
+      console.warn('Erro ao buscar pedido aberto:', ePed.message);
+    }
+  }
+
   var contextoEstado = construirContextoEstado(estado);
+  if (pedidoAbertoHint) {
+    systemBlocks.push({ type: 'text', text: pedidoAbertoHint });
+  }
   if (contextoEstado) {
     systemBlocks.push({ type: 'text', text: contextoEstado });
   }
@@ -432,7 +487,13 @@ async function tratarRespostaVazia(telefone, texto, ultimaToolUsada, estado, per
   if (ultimaToolUsada === 'remover_item') return 'Removi! Mais alguma coisa?';
   if (ultimaToolUsada === 'cancelar_pedido') return 'Cancelei! Se quiser comecar de novo, e so pedir.';
   if (ultimaToolUsada === 'ver_cardapio_categoria') return 'Me diz qual voce quer!';
-  if (ultimaToolUsada === 'ver_pedido_atual') return 'Esse e o seu pedido. Confirma?';
+  if (ultimaToolUsada === 'ver_pedido_atual') {
+    // Fallback com resumo real — se Claude pulou o texto apos ver_pedido_atual,
+    // a gente mesmo gera o resumo com os itens e total. Assim no proximo turno
+    // cliente sabe exatamente o que tem e "confirma" vira um finalizar claro.
+    var resumo = construirResumoParaCliente(estado);
+    return resumo || 'Esse e o seu pedido. Confirma?';
+  }
   if (ultimaToolUsada === 'salvar_cliente') return 'Anotei! Agora me diz se e entrega, retirada ou salao.';
   if (ultimaToolUsada === 'definir_tipo_pedido') return 'Anotei! Como prefere pagar — pix, cartao ou dinheiro?';
   if (ultimaToolUsada === 'definir_pagamento') return 'Anotei! Vou finalizar, confirma pra eu mandar pra cozinha?';
