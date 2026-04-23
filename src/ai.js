@@ -193,17 +193,13 @@ function construirContextoEstado(estado) {
     var temBebida = carrinho.some(function (i) {
       return /coca|refri|suco|agua|água|guaran|sprite|fanta|bebida/i.test(i.nome);
     });
-    var sugestoes = [];
     if (temBurger && !temPorcao) {
-      sugestoes.push('fritas (Fritas 100g R$ 8,00 ou Porcao Cheddar e Bacon R$ 35,00)');
+      linhas.push('\n🍟 UPSELL OBRIGATORIO — fritas: carrinho tem burger sem fritas. ANTES de pedir nome/tipo/pagamento, quando cliente disser "so isso"/"acabou"/"fechou"/"e so", sua PRIMEIRA pergunta DEVE ser: "Quer uma fritas pra acompanhar? Tem a 100g por R$ 8 ou a Cheddar e Bacon por R$ 35." (NAO pule direto pra dados). Se cliente recusar ("nao", "nao quero"), vai pros dados. Se aceitar, chame adicionar_item.');
+    } else if (temBurger && !temBebida) {
+      linhas.push('\n🥤 UPSELL OBRIGATORIO — bebida: carrinho tem lanche sem bebida. ANTES de pedir nome/tipo/pagamento, quando cliente disser "so isso"/"acabou", pergunte: "Quer uma bebida pra acompanhar? Coca lata R$ 8, 600ml R$ 10 ou 2L R$ 15." Se cliente recusar, vai pros dados. Se aceitar, adicione.');
     }
-    if (temBurger && !temBebida) {
-      sugestoes.push('uma bebida pra acompanhar (Coca lata R$ 8,00, 600ml R$ 10,00 ou 2L R$ 15,00)');
-    }
-    if (sugestoes.length) {
-      linhas.push('\n🍟 UPSELL — OPORTUNIDADE: cliente tem lanche no carrinho mas NAO tem ' + sugestoes.join(' nem ') + '.');
-      linhas.push('Regra: se o cliente disser "so isso", "acabou", "fechou", "e so" ou for partir pro pagamento/entrega sem ter adicionado, PERGUNTE UMA VEZ SO, de forma leve: "Quer ' + sugestoes[0] + ' pra acompanhar?" (use a primeira da lista). Se recusar, NAO insista, NAO repita em turnos futuros — siga com o pedido. Se aceitar, chame adicionar_item e siga.');
-    }
+    // NAO oferece upsell em turnos futuros: se ja ofereceu e cliente recusou,
+    // o historico mostra isso, Claude respeita. Nao precisa flag de estado.
   }
 
   return linhas.join('\n');
