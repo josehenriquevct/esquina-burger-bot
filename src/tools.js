@@ -157,6 +157,33 @@ function normalizarQuantidade(valor) {
   return Math.min(50, Math.floor(n));
 }
 
+// Cache de extras adicionados recentemente (por telefone, ultimos 15s) —
+// evita duplicata quando Claude chama adicionar_item pro extra logo apos
+// o detector ter auto-adicionado. Mapa de telefone → { nomes: Set, ts }.
+const extrasAutoPorTelefone = new Map();
+const AUTO_TTL_MS = 15000;
+
+function nomeItemNormalizado(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+function marcarExtraAuto(telefone, nomeItem) {
+  let entry = extrasAutoPorTelefone.get(telefone);
+  if (!entry || Date.now() - entry.ts > AUTO_TTL_MS) {
+    entry = { nomes: new Set(), ts: Date.now() };
+    extrasAutoPorTelefone.set(telefone, entry);
+  }
+  entry.nomes.add(nomeItemNormalizado(nomeItem));
+  entry.ts = Date.now();
+}
+
+function extraFoiAutoAdicionado(telefone, nomeItem) {
+  const entry = extrasAutoPorTelefone.get(telefone);
+  if (!entry) return false;
+  if (Date.now() - entry.ts > AUTO_TTL_MS) { extrasAutoPorTelefone.delete(telefone); return false; }
+  return entry.nomes.has(nomeItemNormalizado(nomeItem));
+}
+
 // Detecta pattern "X extra" / "com X extra" em observacoes do cliente
 // e converte em itens adicionais separados — garante que o preco do
 // extra seja cobrado, independente de Claude ter chamado a tool
@@ -252,6 +279,20 @@ export async function executarTool(telefone, nome, args, estado) {
       if (!item) { item = await buscarAdicional(args.nome_ou_id); origem = 'adicional'; }
       if (!item) return { sucesso: false, erro: `Item "${args.nome_ou_id}" não encontrado no cardápio.` };
 
+      // Dedupe: se o detector ja auto-adicionou esse extra no mesmo turno
+      // e Claude esta tentando adicionar direto depois, skippa pra evitar
+      // dupla cobranca. So aplica a adicionais/extras (qtd 1 default).
+      const ehExtraDireto = (item.cat === 'extras' || origem === 'adicional');
+      if (ehExtraDireto && extraFoiAutoAdicionado(telefone, item.nome)) {
+        console.log('[tools] adicionar_item "' + item.nome + '" SKIP — detector ja auto-adicionou no turno');
+        return {
+          sucesso: true,
+          adicionado: '0x ' + item.nome + ' (ja adicionado como extra do lanche)',
+          carrinho_total: totalCarrinho(estado),
+          nota: 'O extra ja foi adicionado automaticamente na observacao do lanche',
+        };
+      }
+
       const qtd = normalizarQuantidade(args.quantidade);
       let obs = args.observacao ? String(args.observacao).slice(0, 200) : '';
 
@@ -297,6 +338,7 @@ export async function executarTool(telefone, nome, args, estado) {
           subtotal: itemExtra.preco,
         });
         extrasAdicionados.push(itemExtra.nome + ' (R$' + itemExtra.preco + ')');
+        marcarExtraAuto(telefone, itemExtra.nome);
         console.log('[tools] extra auto-adicionado: ' + itemExtra.nome + ' (detectado em obs)');
       }
 
