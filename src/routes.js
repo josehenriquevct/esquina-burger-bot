@@ -48,6 +48,64 @@ function webhookJaProcessado(id) {
   return false;
 }
 
+// ── Buffer de mensagens com debounce ────────────────────────────
+// Clientes mandam mensagens fragmentadas ("Smoke" → "Bacon" → "Coca"
+// → "?"), cada uma dispara uma chamada Claude — processos duplicados,
+// respostas repetidas, custo alto. O buffer acumula por DEBOUNCE_MS.
+// Cada nova mensagem renova o timer; quando ele expira sem mais
+// mensagens, o conteudo acumulado e processado como uma so.
+var bufferPorTelefone = new Map(); // telefone -> [{texto, pushName, imagemData, ts}]
+var timeoutPorTelefone = new Map(); // telefone -> setTimeout ID
+var DEBOUNCE_MS = parseInt(process.env.DEBOUNCE_MS || '2500', 10);
+
+function bufferMensagem(telefone, texto, pushName, imagemData) {
+  var buffer = bufferPorTelefone.get(telefone) || [];
+  var primeiraMsg = buffer.length === 0;
+  buffer.push({ texto: texto || '', pushName: pushName, imagemData: imagemData, ts: Date.now() });
+  bufferPorTelefone.set(telefone, buffer);
+
+  // Mostra "digitando..." desde a 1a msg — cliente ve que bot esta
+  // processando e naturalmente espera antes de mandar mais.
+  if (primeiraMsg) {
+    mostrarDigitando(telefone, DEBOUNCE_MS + 5000).catch(function () {});
+  }
+
+  // Reseta o timer — cada nova msg estende a janela de espera
+  if (timeoutPorTelefone.has(telefone)) {
+    clearTimeout(timeoutPorTelefone.get(telefone));
+  }
+  var t = setTimeout(function () { flushBuffer(telefone); }, DEBOUNCE_MS);
+  timeoutPorTelefone.set(telefone, t);
+}
+
+function flushBuffer(telefone) {
+  var buffer = bufferPorTelefone.get(telefone) || [];
+  if (buffer.length === 0) return;
+  bufferPorTelefone.delete(telefone);
+  timeoutPorTelefone.delete(telefone);
+
+  // Junta textos preservando ordem. PushName e imagem: primeira ocorrencia.
+  var textos = [];
+  var pushName = '';
+  var imagemData = null;
+  for (var i = 0; i < buffer.length; i++) {
+    var m = buffer[i];
+    var t = (m.texto || '').trim();
+    if (t) textos.push(t);
+    if (!pushName && m.pushName) pushName = m.pushName;
+    if (!imagemData && m.imagemData) imagemData = m.imagemData;
+  }
+  var textoConcat = textos.join('\n');
+
+  if (buffer.length > 1) {
+    console.log('Buffer flush: ' + telefone + ' (' + buffer.length + ' msgs concatenadas) — ' + textoConcat.slice(0, 120));
+  }
+
+  processarComFila(telefone, textoConcat, pushName, imagemData).catch(function (e) {
+    console.error('Erro fila apos buffer ' + telefone + ':', e);
+  });
+}
+
 // ── Fila de processamento por telefone (evita msgs simultaneas) ──
 
 var filaPorTelefone = new Map();
@@ -295,7 +353,11 @@ router.post('/webhook', async function(req, res) {
     }
   }
 
-  processarComFila(msg.telefone, msg.texto, msg.pushName, imagemData).catch(function(e) { console.error('Erro fila:', e); });
+  // Enfileira no buffer — aguarda DEBOUNCE_MS antes de processar. Se o
+  // cliente mandar mais msgs nesse intervalo, sao concatenadas e
+  // processadas juntas em uma unica chamada Claude (economia de custo
+  // + bot entende a frase completa em vez de fragmentos).
+  bufferMensagem(msg.telefone, msg.texto, msg.pushName, imagemData);
 });
 
 // ── Endpoints da API ──────────────────────────────────────────
