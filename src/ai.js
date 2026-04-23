@@ -4,11 +4,38 @@ import { config } from './config.js';
 import { systemPrompt, promptInterno } from './prompts.js';
 import { TOOL_DECLARATIONS, executarTool } from './tools.js';
 import { carregarEstado, salvarEstado, limparEstado, mergeClienteSalvo } from './state.js';
-import { getConversa, getConfigLoja } from './firebase.js';
+import { getConversa, getConfigLoja, salvarConversa } from './firebase.js';
 
 var genAI = new GoogleGenerativeAI(config.gemini.apiKey);
 var MODELO = config.gemini.model;
+var MODELO_FALLBACK = config.gemini.modeloFallback;
 var GEMINI_TIMEOUT_MS = parseInt(process.env.GEMINI_TIMEOUT_MS || '25000', 10);
+
+// Detecta erros que indicam bloqueio/cota do modelo (403 denied access, 429
+// quota exceeded). Quando acontecem, o bot tenta uma vez com MODELO_FALLBACK
+// antes de desistir — evita travar a loja inteira por problema de billing.
+function isErroModeloBloqueado(erro) {
+  var msg = String(erro && erro.message || '');
+  return /\b403\b|\b429\b|denied access|quota|rate.?limit|exceeded/i.test(msg);
+}
+
+// Falhas consecutivas do Gemini por telefone (in-memory).
+// Quando passa do limite, auto-pausa pra humano — evita cliente preso
+// num loop de "Desculpe, tive um problema aqui. Pode repetir?".
+var falhasGeminiPorTelefone = new Map();
+var LIMITE_FALHAS_GEMINI = 2;
+
+// Palavras-chave de reclamacao / suporte: pausa pra humano imediatamente,
+// SEM chamar Gemini. Quando cliente sinaliza problema sério, melhor errar
+// pra mais (atendente humano) do que deixar o bot tropeçar.
+// Lista enxuta: so frases inequivocas, pra minimizar falso-positivo.
+var PALAVRAS_ESCALA_HUMANO = [
+  'veio errado', 'pedido errado', 'lanche errado', 'chegou errado',
+  'veio faltando', 'veio sem', 'veio incompleto', 'chegou faltando',
+  'estornar', 'estorno', 'reembolso', 'reembolsar',
+  'falar com atendente', 'chamar atendente', 'falar com humano',
+  'atendimento humano', 'quero uma pessoa',
+];
 
 // Promise.race com timeout — evita Gemini pendurado travar a fila
 function comTimeout(promise, ms, mensagemErro) {
@@ -75,6 +102,24 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
   var conversaAtual = await getConversa(telefone).catch(function() { return null; });
   if (conversaAtual && conversaAtual.status === 'pausado_humano') return null;
 
+  // Escalação imediata: cliente sinalizou problema grave. Pausa e entrega
+  // pra atendente humano SEM passar pelo Gemini.
+  var textoCheck = String(texto || '').toLowerCase();
+  for (var pc = 0; pc < PALAVRAS_ESCALA_HUMANO.length; pc++) {
+    if (textoCheck.indexOf(PALAVRAS_ESCALA_HUMANO[pc]) !== -1) {
+      try {
+        await salvarConversa(telefone, {
+          status: 'pausado_humano',
+          motivoTransferencia: 'palavra_chave:' + PALAVRAS_ESCALA_HUMANO[pc],
+        });
+      } catch (eSalvar) {
+        console.warn('Erro ao pausar por palavra-chave:', eSalvar.message);
+      }
+      console.log('Auto-pausado palavra-chave "' + PALAVRAS_ESCALA_HUMANO[pc] + '": ' + telefone);
+      return 'Entendi. Vou te transferir pra um atendente humano agora. 🙏 Em instantes alguem te responde aqui.';
+    }
+  }
+
   // Carrega estado persistido (carrinho + dados parciais) + cliente salvo
   var estado = await carregarEstado(telefone);
   estado.dados.telefone = telefone;
@@ -103,10 +148,18 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
   if (imagemData && imagemData.base64) {
     try {
       var analise = await analisarImagem(imagemData.base64, imagemData.mimetype || 'image/jpeg');
-      texto = texto + '\n' + analise;
       console.log('Imagem analisada para ' + telefone + ': ' + analise.slice(0, 80));
+      // Se analise falhou, NAO envia "[erro ao analisar imagem]" pro Gemini
+      // — ele pode hallucinar que viu o comprovante e confirmar PIX indevido.
+      // Em vez disso, instrui a pedir reenvio.
+      if (analise.indexOf('[erro') !== -1) {
+        texto = texto + '\n[Cliente enviou uma imagem mas a analise falhou. Peca pra reenviar ou descrever por texto. NAO confirme pagamento sem ver o comprovante.]';
+      } else {
+        texto = texto + '\n' + analise;
+      }
     } catch (e) {
       console.error('Erro ao analisar imagem:', e.message);
+      texto = texto + '\n[Cliente enviou uma imagem mas a analise falhou. Peca pra reenviar ou descrever por texto. NAO confirme pagamento sem ver o comprovante.]';
     }
   }
 
@@ -151,25 +204,63 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
 
   // Inicializa chat com Gemini
   var sysPrompt = await systemPrompt(configLoja);
-  var model = genAI.getGenerativeModel({
-    model: MODELO,
-    tools: TOOL_DECLARATIONS,
-    systemInstruction: sysPrompt,
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 800,
-    },
-  });
+  var GEN_CONFIG = { temperature: 0.7, maxOutputTokens: 800 };
+  function criarModel(nomeModelo) {
+    return genAI.getGenerativeModel({
+      model: nomeModelo,
+      tools: TOOL_DECLARATIONS,
+      systemInstruction: sysPrompt,
+      generationConfig: GEN_CONFIG,
+    });
+  }
+  var model = criarModel(MODELO);
 
   var chat = model.startChat({ history: history });
 
   var result;
   try {
     result = await comTimeout(chat.sendMessage(texto), GEMINI_TIMEOUT_MS, 'gemini-timeout');
+    // Sucesso: zera contador de falhas
+    falhasGeminiPorTelefone.delete(telefone);
   } catch (e) {
+    // Fallback automatico de modelo em caso de 403 (denied access) ou 429
+    // (quota). Tenta uma unica vez com MODELO_FALLBACK antes de desistir.
+    if (isErroModeloBloqueado(e) && MODELO_FALLBACK && MODELO_FALLBACK !== MODELO) {
+      console.warn('Modelo ' + MODELO + ' bloqueado (' + String(e.message).slice(0, 80) + '). Tentando fallback ' + MODELO_FALLBACK);
+      try {
+        var modelFb = criarModel(MODELO_FALLBACK);
+        var chatFb = modelFb.startChat({ history: history });
+        result = await comTimeout(chatFb.sendMessage(texto), GEMINI_TIMEOUT_MS, 'gemini-timeout-fb');
+        falhasGeminiPorTelefone.delete(telefone);
+        model = modelFb;
+        chat = chatFb;
+      } catch (eFb) {
+        console.error('Fallback ' + MODELO_FALLBACK + ' tambem falhou:', eFb.message);
+        e = eFb; // segue pro tratamento normal com o erro do fallback
+      }
+    }
+    if (!result) {
     console.error('Gemini sendMessage erro:', e.message);
     await salvarEstado(telefone, estado);
+
+    // Conta falha e auto-escala se passar do limite
+    var falhas = (falhasGeminiPorTelefone.get(telefone) || 0) + 1;
+    falhasGeminiPorTelefone.set(telefone, falhas);
+    if (falhas >= LIMITE_FALHAS_GEMINI) {
+      falhasGeminiPorTelefone.delete(telefone);
+      try {
+        await salvarConversa(telefone, {
+          status: 'pausado_humano',
+          motivoTransferencia: 'gemini_falhou: ' + String(e.message || '').slice(0, 120),
+        });
+      } catch (eSalvar) {
+        console.warn('Erro ao pausar apos falhas Gemini:', eSalvar.message);
+      }
+      console.error('Auto-pausado para humano apos ' + falhas + ' falhas Gemini: ' + telefone);
+      return 'So um instante, vou te direcionar pra um atendente humano. 🙏';
+    }
     return 'Desculpe, tive um problema aqui. Pode repetir?';
+    } // fim if (!result)
   }
 
   // Loop de tool use (ate 8 iteracoes)
@@ -266,15 +357,26 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     }
 
     var functionResponses = [];
+    var fotoCardapioOk = false;
     for (var k = 0; k < calls.length; k++) {
       ultimaToolUsada = calls[k].name;
       try {
         var r = await executarTool(telefone, calls[k].name, calls[k].args || {}, estado);
         functionResponses.push({ functionResponse: { name: calls[k].name, response: r } });
+        if (calls[k].name === 'enviar_foto_cardapio' && r && r.sucesso) fotoCardapioOk = true;
       } catch (e3) {
         console.error('Erro na tool ' + calls[k].name + ':', e3.message);
         functionResponses.push({ functionResponse: { name: calls[k].name, response: { erro: e3.message } } });
       }
+    }
+
+    // Curto-circuito: se a unica tool chamada foi enviar_foto_cardapio e
+    // deu certo, a legenda ja cobre a resposta. Evita um round-trip extra
+    // ao Gemini que frequentemente volta com FinishReason=STOP vazio.
+    if (fotoCardapioOk && calls.length === 1) {
+      await persistir();
+      console.log('Foto do cardapio enviada — encerrando sem consultar Gemini novamente');
+      return '';
     }
 
     try {

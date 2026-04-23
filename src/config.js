@@ -25,9 +25,13 @@ export const config = {
   },
 
   // Gemini
+  // gemini-2.0-flash tem free tier de ~1500 req/dia; 2.5-flash tem apenas 20/dia
+  // sem billing — por isso default 2.0. O fallback cobre quando o modelo
+  // principal retorna 403/429 em runtime.
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
-    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+    modeloFallback: process.env.GEMINI_MODEL_FALLBACK || 'gemini-2.0-flash',
   },
 
   // Evolution API (WhatsApp)
@@ -93,6 +97,9 @@ export function validarConfig() {
   const avisos = [];
 
   if (!config.gemini.apiKey) erros.push('GEMINI_API_KEY nao configurada');
+  if (config.gemini.model === 'gemini-2.5-flash') {
+    avisos.push('GEMINI_MODEL=gemini-2.5-flash tem cota free tier de so 20 req/dia. Considere gemini-2.0-flash (1500/dia) ou habilite billing.');
+  }
   if (!config.firebase.dbUrl) erros.push('FIREBASE_DB_URL nao configurada');
   if (!config.evolution.url) erros.push('EVOLUTION_URL nao configurada');
   if (!config.evolution.apiKey) erros.push('EVOLUTION_API_KEY nao configurada');

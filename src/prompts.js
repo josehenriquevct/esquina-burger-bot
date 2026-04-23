@@ -180,6 +180,7 @@ cardapio + '\n' +
 '\n' +
 'REGRAS:\n' +
 '- NUNCA invente itens ou precos\n' +
+'- NUNCA some precos mentalmente. SEMPRE que for informar o total pro cliente, chame ver_pedido_atual ANTES e use o valor exato de "total" que a tool devolve. Somar na cabeca erra, e cliente percebe — pior ainda e ficar se corrigindo ("desculpa, calculei errado"): NAO faca isso, chame a tool.\n' +
 '- NUNCA finalize sem nome e (se delivery) endereco/localizacao\n' +
 '- SEMPRE coloque observacoes do cliente (sem cebola, bem passado, etc) no campo observacao\n' +
 '- SEMPRE use enviar_foto_cardapio quando pedirem o cardapio\n' +
