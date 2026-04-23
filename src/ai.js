@@ -325,25 +325,38 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
   if ((!estado.carrinho || estado.carrinho.length === 0) && !estado.pedidoKeyExistente) {
     try {
       var pAberto = await buscarPedidoAbertoDoCliente(telefone, 30);
-      if (pAberto && pAberto.status === 'aguardando') {
+      if (pAberto) {
         var itensFmt = (pAberto.itens || []).map(function (i) {
           return '  - ' + i.qtd + 'x ' + i.nome + (i.obs ? ' (' + i.obs + ')' : '');
         }).join('\n');
-        pedidoAbertoHint = '⚠️ ATENCAO CRITICA: CLIENTE TEM PEDIDO ABERTO RECENTE — AINDA NAO ACEITO PELA COZINHA — PODE SER ALTERADO:\n' +
-          'Codigo: ' + (pAberto.codigoConfirmacao || '(nao setado)') + '\n' +
-          'Status: aguardando (NAO esta em preparo, pode alterar)\n' +
-          'Itens:\n' + itensFmt + '\n' +
-          'Total atual: R$ ' + Number(pAberto.total || 0).toFixed(2).replace('.', ',') + '\n' +
-          '\n' +
-          'REGRA ABSOLUTA: se o cliente pedir QUALQUER alteracao ("adiciona mais X", "tira Y", "muda pagamento", "esqueci de X", "no pedido que acabei de fazer", "no meu ultimo pedido"):\n' +
-          '1. Sua PRIMEIRA tool call OBRIGATORIA e carregar_pedido_recente. Nao responda nada antes.\n' +
-          '2. Depois use adicionar_item/remover_item conforme pedido.\n' +
-          '3. Chame finalizar_pedido (vai ATUALIZAR, nao duplicar).\n' +
-          '4. Confirme ao cliente o NOVO total.\n' +
-          'NUNCA, JAMAIS responda "esta em preparo" ou "nao da pra alterar". O status e "aguardando", voce pode alterar. So transfira pra humano se carregar_pedido_recente retornar erro.';
-        console.log('Hint injetado pra ' + telefone + ': pedido ' + pAberto.codigoConfirmacao + ' aberto recentemente');
-      } else if (pAberto) {
-        console.log('Pedido aberto encontrado mas status=' + pAberto.status + ' — nao injetando hint');
+        var codigo = pAberto.codigoConfirmacao || '(nao setado)';
+        var totalFmt = 'R$ ' + Number(pAberto.total || 0).toFixed(2).replace('.', ',');
+        var statusAtual = pAberto.status || 'aguardando';
+
+        if (statusAtual === 'aguardando') {
+          pedidoAbertoHint = '⚠️ ATENCAO CRITICA: CLIENTE TEM PEDIDO ABERTO RECENTE — AINDA NAO ACEITO PELA COZINHA — PODE SER ALTERADO:\n' +
+            'Codigo: ' + codigo + '\n' +
+            'Status: aguardando (NAO esta em preparo, pode alterar)\n' +
+            'Itens:\n' + itensFmt + '\n' +
+            'Total atual: ' + totalFmt + '\n\n' +
+            'REGRA ABSOLUTA: se o cliente pedir QUALQUER alteracao ("adiciona mais X", "tira Y", "muda pagamento", "esqueci de X", "no pedido que acabei de fazer"):\n' +
+            '1. Sua PRIMEIRA tool call OBRIGATORIA e carregar_pedido_recente. Nao responda antes.\n' +
+            '2. Use adicionar_item/remover_item conforme pedido.\n' +
+            '3. Chame finalizar_pedido (vai ATUALIZAR, nao duplicar).\n' +
+            '4. Confirme o NOVO total ao cliente.';
+          console.log('Hint injetado (aguardando): ' + telefone + ' pedido ' + codigo);
+        } else {
+          pedidoAbertoHint = '⚠️ ATENCAO: CLIENTE TEM PEDIDO RECENTE JA ACEITO PELA COZINHA:\n' +
+            'Codigo: ' + codigo + '\n' +
+            'Status: ' + statusAtual + ' (ja esta em preparo/saiu pra entrega — NAO pode mais ser alterado automaticamente)\n' +
+            'Itens:\n' + itensFmt + '\n' +
+            'Total: ' + totalFmt + '\n\n' +
+            'REGRA ABSOLUTA: se o cliente pedir alteracao desse pedido ("adiciona X", "tira Y", "esqueci de pedir", "no pedido que acabei de fazer"):\n' +
+            '1. NAO minta que da pra alterar, NAO diga "liga pra gente" ou "fala com a cozinha" — isso nao resolve nada.\n' +
+            '2. Chame transferir_humano IMEDIATAMENTE com motivo "alterar pedido ja aceito - ' + codigo + '" — um atendente humano pode ajustar manualmente no PDV ou enviar junto.\n' +
+            '3. Antes de transferir, avise o cliente em uma frase: "Seu pedido ja entrou na cozinha. Vou te passar pra um atendente agora pra ajustar isso pra voce."';
+          console.log('Hint injetado (pedido ja aceito): ' + telefone + ' pedido ' + codigo + ' status=' + statusAtual);
+        }
       }
     } catch (ePed) {
       console.warn('Erro ao buscar pedido aberto:', ePed.message);
