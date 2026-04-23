@@ -25,13 +25,15 @@ export const config = {
   },
 
   // Gemini
-  // gemini-2.0-flash tem free tier de ~1500 req/dia; 2.5-flash tem apenas 20/dia
-  // sem billing — por isso default 2.0. O fallback cobre quando o modelo
-  // principal retorna 403/429 em runtime.
+  // gemini-2.0-flash foi descontinuado pra novos projetos (404). Entre os
+  // modelos com acesso garantido: 2.5-flash-lite tem free tier generoso e
+  // roda bem function calling; 2.5-flash tem qualidade superior mas apenas
+  // ~20 req/dia sem billing. Usamos lite como principal e flash como
+  // fallback automatico (em caso de 403/429).
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
-    model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
-    modeloFallback: process.env.GEMINI_MODEL_FALLBACK || 'gemini-2.0-flash',
+    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
+    modeloFallback: process.env.GEMINI_MODEL_FALLBACK || 'gemini-2.5-flash',
   },
 
   // Evolution API (WhatsApp)
@@ -97,8 +99,11 @@ export function validarConfig() {
   const avisos = [];
 
   if (!config.gemini.apiKey) erros.push('GEMINI_API_KEY nao configurada');
+  if (config.gemini.model === 'gemini-2.0-flash' || config.gemini.modeloFallback === 'gemini-2.0-flash') {
+    avisos.push('gemini-2.0-flash foi descontinuado pra novos projetos (404). Use gemini-2.5-flash-lite ou gemini-2.5-flash.');
+  }
   if (config.gemini.model === 'gemini-2.5-flash') {
-    avisos.push('GEMINI_MODEL=gemini-2.5-flash tem cota free tier de so 20 req/dia. Considere gemini-2.0-flash (1500/dia) ou habilite billing.');
+    avisos.push('gemini-2.5-flash tem cota free tier de so 20 req/dia. Considere gemini-2.5-flash-lite (cota maior) como principal ou habilite billing.');
   }
   if (!config.firebase.dbUrl) erros.push('FIREBASE_DB_URL nao configurada');
   if (!config.evolution.url) erros.push('EVOLUTION_URL nao configurada');
