@@ -180,6 +180,32 @@ function construirContextoEstado(estado) {
   if (parciais.length) linhas.push('Dados ja coletados: ' + parciais.join('; '));
   if (estado.pedidoKeyExistente) linhas.push('ATENCAO: cliente esta ALTERANDO um pedido existente (id=' + estado.pedidoKeyExistente + '). Ao chamar finalizar_pedido, o sistema atualiza o pedido em vez de duplicar.');
   linhas.push('Lembre: para INFORMAR o valor total ao cliente, ainda use ver_pedido_atual (tem o calculo exato com taxa de entrega).');
+
+  // ── Oportunidades de upsell (so sinaliza, Claude decide quando oferecer) ──
+  // Detecta por heuristica de nome (carrinho real de pedido de hamburgueria).
+  if (carrinho.length > 0 && process.env.UPSELL_ATIVO !== 'false') {
+    var temBurger = carrinho.some(function (i) {
+      return /burger|blade|bacon|lanche|esquina/i.test(i.nome) && !/bacon.*extra|bacon$/i.test(i.nome);
+    });
+    var temPorcao = carrinho.some(function (i) {
+      return /frita|porcao|porção|cheddar.*bacon/i.test(i.nome);
+    });
+    var temBebida = carrinho.some(function (i) {
+      return /coca|refri|suco|agua|água|guaran|sprite|fanta|bebida/i.test(i.nome);
+    });
+    var sugestoes = [];
+    if (temBurger && !temPorcao) {
+      sugestoes.push('fritas (Fritas 100g R$ 8,00 ou Porcao Cheddar e Bacon R$ 35,00)');
+    }
+    if (temBurger && !temBebida) {
+      sugestoes.push('uma bebida pra acompanhar (Coca lata R$ 8,00, 600ml R$ 10,00 ou 2L R$ 15,00)');
+    }
+    if (sugestoes.length) {
+      linhas.push('\n🍟 UPSELL — OPORTUNIDADE: cliente tem lanche no carrinho mas NAO tem ' + sugestoes.join(' nem ') + '.');
+      linhas.push('Regra: se o cliente disser "so isso", "acabou", "fechou", "e so" ou for partir pro pagamento/entrega sem ter adicionado, PERGUNTE UMA VEZ SO, de forma leve: "Quer ' + sugestoes[0] + ' pra acompanhar?" (use a primeira da lista). Se recusar, NAO insista, NAO repita em turnos futuros — siga com o pedido. Se aceitar, chame adicionar_item e siga.');
+    }
+  }
+
   return linhas.join('\n');
 }
 
