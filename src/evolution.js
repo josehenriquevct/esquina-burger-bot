@@ -22,15 +22,55 @@ async function evoReq(path, method = 'GET', body) {
   return res.json().catch(function() { return {}; });
 }
 
+// ── Cache de msgs enviadas PELO BOT ────────────────────────────
+// Guardamos os IDs das msgs que o bot enviou via API. Quando chega
+// webhook com fromMe=true, checamos esse cache: se o ID esta aqui,
+// foi o proprio bot (ignora). Se NAO esta, foi o atendente digitando
+// manualmente do celular da loja — ai pausamos o chat com o cliente.
+const msgsEnviadasPeloBot = new Map(); // id -> timestamp
+const BOT_MSG_TTL_MS = 10 * 60 * 1000; // 10 min — suficiente pra webhook chegar
+
+function registrarMsgDoBot(resp) {
+  try {
+    // Evolution retorna estruturas diferentes conforme a versao. Tenta pegar id
+    // de varios caminhos possiveis.
+    const id = (resp && resp.key && resp.key.id)
+      || (resp && resp.message && resp.message.key && resp.message.key.id)
+      || (resp && resp.messageId)
+      || null;
+    if (!id) return;
+    msgsEnviadasPeloBot.set(id, Date.now());
+    // Limpa entradas velhas se cache crescer
+    if (msgsEnviadasPeloBot.size > 500) {
+      const agora = Date.now();
+      for (const [k, ts] of msgsEnviadasPeloBot) {
+        if (agora - ts > BOT_MSG_TTL_MS) msgsEnviadasPeloBot.delete(k);
+      }
+    }
+  } catch (e) { /* nao critico */ }
+}
+
+export function foiMsgEnviadaPeloBot(id) {
+  if (!id) return false;
+  const ts = msgsEnviadasPeloBot.get(id);
+  if (!ts) return false;
+  if (Date.now() - ts > BOT_MSG_TTL_MS) {
+    msgsEnviadasPeloBot.delete(id);
+    return false;
+  }
+  return true;
+}
+
 // ── Enviar mensagem de texto ───────────────────────────────────
 
 export async function enviarMensagem(telefone, texto) {
   const numero = String(telefone).replace(/\D+/g, '');
-  await evoReq('/message/sendText/' + INSTANCE, 'POST', {
+  const resp = await evoReq('/message/sendText/' + INSTANCE, 'POST', {
     number: numero,
     text: texto,
     delay: 800,
   });
+  registrarMsgDoBot(resp);
   console.log('MSG -> ' + numero + ': ' + texto.slice(0, 60) + (texto.length > 60 ? '...' : ''));
 }
 
@@ -39,12 +79,13 @@ export async function enviarMensagem(telefone, texto) {
 export async function enviarImagem(telefone, imageUrl, caption) {
   if (caption === undefined) caption = '';
   const numero = String(telefone).replace(/\D+/g, '');
-  await evoReq('/message/sendMedia/' + INSTANCE, 'POST', {
+  const resp = await evoReq('/message/sendMedia/' + INSTANCE, 'POST', {
     number: numero,
     mediatype: 'image',
     media: imageUrl,
     caption: caption,
   });
+  registrarMsgDoBot(resp);
   console.log('Imagem enviada -> ' + numero);
 }
 
@@ -88,12 +129,20 @@ export function parseWebhook(body) {
     var data = (body && body.data) ? body.data : body;
     if (!data) return null;
 
-    // Ignora mensagens enviadas por nos
-    if (data.key && data.key.fromMe === true) return null;
-
-    // Ignora grupos (so @s.whatsapp.net)
     var remoteJid = (data.key && data.key.remoteJid) ? data.key.remoteJid : '';
+    // Ignora grupos (so @s.whatsapp.net)
     if (remoteJid.indexOf('@s.whatsapp.net') === -1) return null;
+
+    // fromMe=true: msg enviada pelo numero da loja. Pode ser o bot
+    // (ignora) ou o atendente digitando no celular manualmente (sinaliza
+    // pra pausar a conversa). Diferenciamos pelo cache de IDs.
+    if (data.key && data.key.fromMe === true) {
+      var msgId = data.key.id || '';
+      if (foiMsgEnviadaPeloBot(msgId)) return null; // foi o bot, ignora
+      // Msg manual do atendente — retorna sinal especial pra webhook handler
+      var telefoneDoCliente = remoteJid.split('@')[0];
+      return { msgManualAtendente: true, telefone: telefoneDoCliente };
+    }
 
     var telefone = remoteJid.split('@')[0];
     var msg = data.message || {};

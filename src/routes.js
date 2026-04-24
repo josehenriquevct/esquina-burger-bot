@@ -215,6 +215,30 @@ router.post('/webhook', async function(req, res) {
   var msg = parseWebhook(req.body);
   if (!msg) return;
 
+  // ── Atendente respondeu manualmente pelo celular ──────────────
+  // Quando o dono/atendente digita manualmente no celular da loja, o
+  // Evolution dispara webhook com fromMe=true. O parseWebhook ja
+  // filtrou as msgs que saem do bot via API. Entao, se chegou aqui
+  // com esse flag, foi o atendente — pausa o chat automaticamente
+  // pra bot nao ficar respondendo quando humano ja ta atendendo.
+  if (msg.msgManualAtendente) {
+    var telManual = phoneKey(msg.telefone);
+    if (!telManual || isNumeroInterno(telManual)) return;
+    try {
+      var conv = await getConversa(telManual);
+      if (!conv || conv.status !== 'pausado_humano') {
+        await salvarConversa(telManual, {
+          status: 'pausado_humano',
+          motivoTransferencia: 'atendente_respondeu_manualmente',
+        });
+        console.log('Atendente respondeu manualmente — chat pausado: ' + telManual);
+      }
+    } catch (eManual) {
+      console.warn('Erro ao pausar apos msg manual:', eManual.message);
+    }
+    return;
+  }
+
   if (!verificarRateLimit(msg.telefone)) {
     console.warn('Rate limit: ' + msg.telefone);
     return;
