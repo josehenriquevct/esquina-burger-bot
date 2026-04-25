@@ -149,6 +149,52 @@ export async function analisarImagem(base64Img, mimetype) {
   }
 }
 
+// ── Validacao de total na resposta do Claude ────────────────────
+// Claude as vezes apresenta resumo com items e total alucinados (ja
+// observado nos pedidos cod 8664 e 2331: bot mostrou Total R$ 47 mas
+// o carrinho real tinha 3 itens somando R$ 80 + taxa, cliente foi
+// cobrado R$ 83). Antes de devolver a resposta pro cliente, a gente
+// extrai todos os "Total: R$ X" do texto e compara com o total real
+// do estado. Se divergir mais de 50 centavos, substituimos a resposta
+// inteira pelo resumo correto gerado pelo backend — a verdade vem do
+// estado, nao da prosa do Claude.
+async function validarTotalNaResposta(texto, estado) {
+  if (!texto || !estado || !Array.isArray(estado.carrinho) || estado.carrinho.length === 0) {
+    return texto;
+  }
+  var matches = [];
+  // \btotal\b nao bate em "subtotal" (palavra contigua, sem word boundary
+  // interno). Captura "Total: R$X", "Total — R$X", "Total ficou em R$X",
+  // "valor R$X", etc — ate 25 chars entre "total" e "R$".
+  var re = /\b(?:total|valor)\b[^\n]{0,25}?r\$\s*(\d+(?:[.,]\d{1,2})?)/gi;
+  var m;
+  while ((m = re.exec(texto)) !== null) {
+    matches.push(parseFloat(m[1].replace(',', '.')));
+  }
+  if (!matches.length) return texto;
+
+  var subtotal = totalCarrinho(estado);
+  var taxa = 0;
+  if (estado.dados && estado.dados.tipo === 'delivery') {
+    try {
+      var cfgLoja = await getConfigLoja();
+      taxa = (cfgLoja && typeof cfgLoja.taxa_entrega === 'number')
+        ? cfgLoja.taxa_entrega
+        : parseFloat(config.restaurante.taxaEntrega || '0');
+    } catch (e) {
+      taxa = parseFloat(config.restaurante.taxaEntrega || '0');
+    }
+  }
+  var totalReal = subtotal + taxa;
+
+  var todosBatem = matches.every(function (v) { return Math.abs(v - totalReal) < 0.5; });
+  if (todosBatem) return texto;
+
+  console.warn('[guardrail] total na resposta do Claude divergente. Claude=[' + matches.join(',') + '] real=' + totalReal + ' — substituindo pelo resumo correto');
+  var resumoCorreto = await construirResumoParaCliente(estado);
+  return resumoCorreto || ('O total correto do seu pedido e R$ ' + totalReal.toFixed(2).replace('.', ',') + '. Confirma?');
+}
+
 // ── Curto-circuito de confirmacao ───────────────────────────────
 // Claude as vezes reapresenta resumo quando cliente diz "confirma" apos
 // ja ter visto um resumo. Quando o estado esta todo preenchido e o
@@ -560,7 +606,11 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
       var txt = extrairTexto(result.content);
       if (txt) {
         await persistir();
-        return txt;
+        // Guardrail: garante que qualquer "Total: R$ X" no texto bate
+        // com o total real do estado. Se divergir, substitui pelo
+        // resumo correto. Evita Claude alucinar valor e cliente ser
+        // cobrado diferente do que viu.
+        return await validarTotalNaResposta(txt, estado);
       }
       // Texto vazio sem tool — fallbacks heuristicos
       console.error('Claude retornou texto vazio. Ultima tool:', ultimaToolUsada, 'StopReason:', result.stop_reason);
