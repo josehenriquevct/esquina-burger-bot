@@ -163,6 +163,19 @@ function ehConfirmacaoCurta(texto) {
   return REGEX_CONFIRMACAO_CURTA.test(String(texto || ''));
 }
 
+// Detecta perguntas de valor — "quanto fica?", "quanto deu?", "qual o
+// total?", "quanto a taxa?", etc. Quando cliente pergunta valor, Claude
+// as vezes some mentalmente e erra (visto na conversa da Nadja: 2 Juniors
+// no carrinho mas Claude disse "1 lanche = R$ 35"). Curto-circuito devolve
+// o resumo do estado real, calculado pelo backend.
+var REGEX_PERGUNTA_VALOR = /\b(quanto|qual)\b.{0,40}\b(fica|deu|da|dá|sai|saiu|custa|é|e|ficou|vai\s*dar|total|taxa|valor|preco|preço)\b|\b(total|valor)\b\s*[\?]?\s*$|\bme\s+da\s+o\s+total\b|\bsoma\b.*\b(quanto|total|valor)\b/i;
+
+function ehPerguntaDeValor(texto) {
+  var t = String(texto || '').trim();
+  if (t.length > 60) return false; // frases longas — provavelmente nao e so pergunta
+  return REGEX_PERGUNTA_VALOR.test(t);
+}
+
 function estadoProntoParaFinalizar(estado) {
   if (!estado || !Array.isArray(estado.carrinho) || estado.carrinho.length === 0) return false;
   var d = estado.dados || {};
@@ -412,6 +425,26 @@ export async function processarMensagem(telefone, texto, pushName, imagemData) {
     } catch (eCurto) {
       console.error('Curto-circuito falhou, caindo no fluxo normal:', eCurto.message);
       // Continua o fluxo normal com o Claude
+    }
+  }
+
+  // ── Curto-circuito de pergunta de valor ─────────────────────────
+  // Cliente perguntou "quanto fica/deu/total/taxa". Claude as vezes
+  // soma de cabeca e erra (caso real: pedido cod 3921, 2 Juniors no
+  // carrinho mas Claude respondeu "1 lanche = R$ 35", cliente
+  // confirmou achando 35 e foi cobrado 59). Aqui devolvemos o resumo
+  // calculado pelo backend, sempre correto.
+  if (estado.carrinho && estado.carrinho.length > 0 && ehPerguntaDeValor(texto)) {
+    console.log('Curto-circuito de pergunta de valor: devolvendo resumo do estado para ' + telefone);
+    try {
+      var resumoVal = await construirResumoParaCliente(estado);
+      if (resumoVal) {
+        await salvarEstado(telefone, estado);
+        return resumoVal;
+      }
+    } catch (eVal) {
+      console.error('Curto-circuito de valor falhou:', eVal.message);
+      // Cai no fluxo normal
     }
   }
 
